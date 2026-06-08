@@ -1,15 +1,14 @@
 import { Request, Response, NextFunction } from 'express';
-import jwt, { SignOptions } from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
 import User, { IUser } from '../models/User';
 import { AppError } from '../utils/AppError';
 import { catchAsync } from '../utils/catchAsync';
+import { verifyAccessToken, type TokenPayload } from '../services/tokenService';
+import Session from '../models/Session';
 
 export interface AuthRequest extends Request {
   user?: IUser;
-}
-
-interface JwtPayload {
-  id: string;
+  sessionId?: string;
 }
 
 export const protect = catchAsync(async (req: AuthRequest, _res: Response, next: NextFunction) => {
@@ -23,11 +22,23 @@ export const protect = catchAsync(async (req: AuthRequest, _res: Response, next:
     return next(new AppError('Not authorized. Please log in.', 401));
   }
 
-  const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret') as JwtPayload;
-  const user = await User.findById(decoded.id);
+  let decoded: TokenPayload;
+  try {
+    decoded = verifyAccessToken(token);
+  } catch (error) {
+    if (error instanceof jwt.TokenExpiredError) {
+      return next(new AppError('Access token expired. Please refresh your session.', 401));
+    }
+    return next(new AppError('Invalid access token.', 401));
+  }
 
+  const user = await User.findById(decoded.id);
   if (!user) {
     return next(new AppError('User no longer exists.', 401));
+  }
+
+  if (decoded.tokenVersion !== user.tokenVersion) {
+    return next(new AppError('Session revoked. Please log in again.', 401));
   }
 
   req.user = user;
@@ -43,9 +54,25 @@ export const restrictTo = (...roles: string[]) => {
   };
 };
 
-export const generateToken = (userId: string): string => {
-  const options: SignOptions = {
-    expiresIn: (process.env.JWT_EXPIRES_IN || '7d') as SignOptions['expiresIn'],
-  };
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET || 'secret', options);
-};
+export const attachSessionFromRefresh = catchAsync(
+  async (req: AuthRequest, _res: Response, next: NextFunction) => {
+    const refreshToken = req.cookies?.refreshToken;
+    if (refreshToken) {
+      const { hashToken } = await import('../utils/crypto');
+      const session = await Session.findOne({
+        refreshTokenHash: hashToken(refreshToken),
+        revokedAt: { $exists: false },
+        expiresAt: { $gt: new Date() },
+      });
+      if (session) {
+        req.sessionId = session._id.toString();
+      }
+    }
+    next();
+  }
+);
+
+export const getRequestMeta = (req: Request) => ({
+  ipAddress: req.ip || req.socket.remoteAddress || '',
+  userAgent: req.get('user-agent') || '',
+});

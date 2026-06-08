@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { Response } from 'express';
 import Order from '../models/Order';
 import Product from '../models/Product';
@@ -5,7 +6,8 @@ import Coupon from '../models/Coupon';
 import { AuthRequest } from '../middleware/auth';
 import { AppError } from '../utils/AppError';
 import { catchAsync } from '../utils/catchAsync';
-import { getStripe } from '../config/stripe';
+import { getStripe, isStripeEnabled } from '../config/stripe';
+import { isDevelopment } from '../config/env';
 
 const generateOrderNumber = () => {
   const timestamp = Date.now().toString(36).toUpperCase();
@@ -85,6 +87,14 @@ export const createOrder = catchAsync(async (req: AuthRequest, res: Response) =>
   });
 
   if (paymentMethod === 'stripe') {
+    if (!isStripeEnabled()) {
+      return res.status(201).json({
+        success: true,
+        order,
+        demoMode: true,
+      });
+    }
+
     const paymentIntent = await getStripe().paymentIntents.create({
       amount: Math.round(total * 100),
       currency: 'usd',
@@ -182,20 +192,69 @@ export const confirmStripePayment = catchAsync(async (req: AuthRequest, res: Res
     throw new AppError('Payment not completed', 400);
   }
 
-  for (const item of order.items) {
-    await Product.updateOne(
-      { _id: item.product, 'sizes.size': item.size },
-      { $inc: { 'sizes.$.stock': -item.quantity } }
-    );
+  if (order.paymentStatus === 'paid') {
+    return res.json({ success: true, order });
   }
 
-  if (order.coupon) {
-    await Coupon.updateOne({ _id: order.coupon }, { $inc: { usedCount: 1 } });
+  await finalizePaidOrder(order);
+
+  res.json({ success: true, order });
+});
+
+const finalizePaidOrder = async (order: InstanceType<typeof Order>) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    for (const item of order.items) {
+      const result = await Product.updateOne(
+        { _id: item.product, 'sizes.size': item.size, 'sizes.stock': { $gte: item.quantity } },
+        { $inc: { 'sizes.$.stock': -item.quantity } },
+        { session }
+      );
+      if (result.modifiedCount === 0) {
+        throw new AppError(`Insufficient stock for ${item.name} (${item.size})`, 400);
+      }
+    }
+
+    if (order.coupon) {
+      const coupon = await Coupon.findById(order.coupon).session(session);
+      if (!coupon || coupon.usedCount >= coupon.usageLimit) {
+        throw new AppError('Coupon usage limit reached', 400);
+      }
+      coupon.usedCount += 1;
+      await coupon.save({ session });
+    }
+
+    order.paymentStatus = 'paid';
+    order.orderStatus = 'confirmed';
+    await order.save({ session });
+
+    await session.commitTransaction();
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
+  }
+};
+
+export const confirmDemoPayment = catchAsync(async (req: AuthRequest, res: Response) => {
+  if (!isDevelopment) {
+    throw new AppError('Demo payment is disabled in production', 403);
+  }
+  if (isStripeEnabled()) {
+    throw new AppError('Demo payment is only available when Stripe is not configured', 400);
   }
 
-  order.paymentStatus = 'paid';
-  order.orderStatus = 'confirmed';
-  await order.save();
+  const order = await Order.findById(req.params.id);
+  if (!order) throw new AppError('Order not found', 404);
+  if (order.user.toString() !== req.user!._id.toString()) throw new AppError('Not authorized', 403);
+  if (order.paymentMethod !== 'stripe') throw new AppError('Order is not a card payment', 400);
+  if (order.paymentStatus === 'paid') {
+    return res.json({ success: true, order });
+  }
 
+  await finalizePaidOrder(order);
   res.json({ success: true, order });
 });

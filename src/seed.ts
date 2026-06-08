@@ -6,8 +6,11 @@ import Category from './models/Category';
 import Product from './models/Product';
 import Banner from './models/Banner';
 import Coupon from './models/Coupon';
+import { uploadFromUrl } from './utils/cloudinaryUpload';
 
 dotenv.config();
+
+const seedImage = async (url: string) => uploadFromUrl(url, 'ecommerce/seed');
 
 const seed = async () => {
   const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/ecommerce';
@@ -26,15 +29,35 @@ const seed = async () => {
   const customerPassword = await bcrypt.hash('customer123', 12);
 
   await User.create([
-    { name: 'Admin User', email: 'admin@store.com', password: adminPassword, role: 'admin' },
-    { name: 'John Doe', email: 'john@example.com', password: customerPassword, role: 'customer' },
+    { name: 'Admin User', email: 'admin@store.com', password: adminPassword, role: 'admin', emailVerified: true },
+    { name: 'John Doe', email: 'john@example.com', password: customerPassword, role: 'customer', emailVerified: true },
   ]);
 
   const categories = await Category.insertMany([
-    { name: 'Men', slug: 'men', description: 'Men\'s fashion' },
-    { name: 'Women', slug: 'women', description: 'Women\'s fashion' },
-    { name: 'Accessories', slug: 'accessories', description: 'Fashion accessories' },
-    { name: 'Footwear', slug: 'footwear', description: 'Shoes and sneakers' },
+    {
+      name: 'Men',
+      slug: 'men',
+      description: 'Men\'s fashion',
+      image: await seedImage('https://images.unsplash.com/photo-1617137968427-85924c800a41?w=600'),
+    },
+    {
+      name: 'Women',
+      slug: 'women',
+      description: 'Women\'s fashion',
+      image: await seedImage('https://images.unsplash.com/photo-1483985988355-763728e3685b?w=600'),
+    },
+    {
+      name: 'Accessories',
+      slug: 'accessories',
+      description: 'Fashion accessories',
+      image: await seedImage('https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=600'),
+    },
+    {
+      name: 'Footwear',
+      slug: 'footwear',
+      description: 'Shoes and sneakers',
+      image: await seedImage('https://images.unsplash.com/photo-1549298916-b41d501d3772?w=600'),
+    },
   ]);
 
   const subcategories = await Category.insertMany([
@@ -53,7 +76,7 @@ const seed = async () => {
       compareAtPrice: 39.99,
       category: categories[0]._id,
       subcategory: subcategories[0]._id,
-      images: ['https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=800'],
+      images: [await seedImage('https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=800')],
       colors: ['White', 'Black', 'Navy'],
       sizes: [{ size: 'S', stock: 50 }, { size: 'M', stock: 75 }, { size: 'L', stock: 60 }, { size: 'XL', stock: 40 }],
       isBestSeller: true,
@@ -69,7 +92,7 @@ const seed = async () => {
       compareAtPrice: 99.99,
       category: categories[0]._id,
       subcategory: subcategories[1]._id,
-      images: ['https://images.unsplash.com/photo-1542272604-787c3835535d?w=800'],
+      images: [await seedImage('https://images.unsplash.com/photo-1542272604-787c3835535d?w=800')],
       colors: ['Dark Blue', 'Light Blue'],
       sizes: [{ size: '30', stock: 30 }, { size: '32', stock: 45 }, { size: '34', stock: 35 }, { size: '36', stock: 25 }],
       isBestSeller: true,
@@ -83,7 +106,7 @@ const seed = async () => {
       price: 89.99,
       category: categories[1]._id,
       subcategory: subcategories[2]._id,
-      images: ['https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=800'],
+      images: [await seedImage('https://images.unsplash.com/photo-1595777457583-95e059d581b8?w=800')],
       colors: ['Floral Pink', 'Floral Blue'],
       sizes: [{ size: 'XS', stock: 20 }, { size: 'S', stock: 35 }, { size: 'M', stock: 40 }, { size: 'L', stock: 25 }],
       isFeatured: true,
@@ -99,7 +122,7 @@ const seed = async () => {
       compareAtPrice: 159.99,
       category: categories[2]._id,
       subcategory: subcategories[3]._id,
-      images: ['https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=800'],
+      images: [await seedImage('https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=800')],
       colors: ['Brown', 'Black', 'Tan'],
       sizes: [{ size: 'One Size', stock: 45 }],
       isCrazyDeal: true,
@@ -113,7 +136,7 @@ const seed = async () => {
       price: 119.99,
       compareAtPrice: 149.99,
       category: categories[3]._id,
-      images: ['https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800'],
+      images: [await seedImage('https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800')],
       colors: ['Red', 'Black', 'White'],
       sizes: [{ size: '8', stock: 30 }, { size: '9', stock: 40 }, { size: '10', stock: 35 }, { size: '11', stock: 25 }],
       isBestSeller: true,
@@ -128,7 +151,7 @@ const seed = async () => {
       price: 59.99,
       category: categories[0]._id,
       subcategory: subcategories[0]._id,
-      images: ['https://images.unsplash.com/photo-1556821840-3a63f95609a7?w=800'],
+      images: [await seedImage('https://images.unsplash.com/photo-1556821840-3a63f95609a7?w=800')],
       colors: ['Gray', 'Black', 'Navy'],
       sizes: [{ size: 'S', stock: 40 }, { size: 'M', stock: 55 }, { size: 'L', stock: 50 }, { size: 'XL', stock: 30 }],
       isSpecialCombo: true,
@@ -143,14 +166,14 @@ const seed = async () => {
     {
       title: 'Summer Collection 2026',
       subtitle: 'Up to 50% off on selected items',
-      image: 'https://images.unsplash.com/photo-1441984904996-e0b6a68737d2?w=1600',
+      image: await seedImage('https://images.unsplash.com/photo-1441984904996-e0b6a68737d2?w=1600'),
       link: '/products',
       position: 0,
     },
     {
       title: 'New Arrivals',
       subtitle: 'Discover the latest trends',
-      image: 'https://images.unsplash.com/photo-1483985988355-763728e3685b?w=1600',
+      image: await seedImage('https://images.unsplash.com/photo-1483985988355-763728e3685b?w=1600'),
       link: '/products?sort=newest',
       position: 1,
     },

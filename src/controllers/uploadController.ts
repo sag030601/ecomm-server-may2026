@@ -4,6 +4,9 @@ import Product from '../models/Product';
 import Coupon from '../models/Coupon';
 import { catchAsync } from '../utils/catchAsync';
 import { getStripe } from '../config/stripe';
+import { isCloudinaryConfigured } from '../config/cloudinary';
+import { uploadFromBuffer } from '../utils/cloudinaryUpload';
+import { AppError } from '../utils/AppError';
 
 export const handleWebhook = catchAsync(async (req: Request, res: Response) => {
   const sig = req.headers['stripe-signature'] as string;
@@ -50,18 +53,13 @@ export const uploadImage = catchAsync(async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, message: 'No file uploaded' });
   }
 
-  const cloudinary = (await import('../config/cloudinary')).default;
-
-  const result = await new Promise<{ secure_url: string }>((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
-      { folder: 'ecommerce' },
-      (error, result) => {
-        if (error) reject(error);
-        else resolve(result as { secure_url: string });
-      }
+  if (!isCloudinaryConfigured()) {
+    throw new AppError(
+      'Cloudinary is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET in .env',
+      503
     );
-    stream.end(req.file!.buffer);
-  });
+  }
 
-  res.json({ success: true, url: result.secure_url });
+  const url = await uploadFromBuffer(req.file.buffer);
+  res.json({ success: true, url });
 });
