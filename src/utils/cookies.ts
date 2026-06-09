@@ -8,7 +8,9 @@ export const setRefreshTokenCookie = (res: Response, refreshToken: string): void
   res.cookie(REFRESH_COOKIE, refreshToken, {
     httpOnly: true,
     secure: isProduction,
-    sameSite: 'strict',
+    // Lax allows the cookie to be set on OAuth redirect responses; Strict blocks
+    // cross-origin API calls between CLIENT_URL and API_URL in local development.
+    sameSite: isProduction ? 'strict' : 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000,
     path: REFRESH_PATH,
   });
@@ -18,7 +20,7 @@ export const clearRefreshTokenCookie = (res: Response): void => {
   res.clearCookie(REFRESH_COOKIE, {
     httpOnly: true,
     secure: isProduction,
-    sameSite: 'strict',
+    sameSite: isProduction ? 'strict' : 'lax',
     path: REFRESH_PATH,
   });
 };

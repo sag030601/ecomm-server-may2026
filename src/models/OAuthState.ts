@@ -6,6 +6,7 @@ export interface IOAuthState extends Document {
   provider: OAuthProvider;
   codeVerifier: string;
   redirectUri: string;
+  clientRedirect: string;
   expiresAt: Date;
 }
 
@@ -14,6 +15,7 @@ const oauthStateSchema = new Schema<IOAuthState>({
   provider: { type: String, enum: ['google', 'github', 'microsoft'], required: true },
   codeVerifier: { type: String, required: true },
   redirectUri: { type: String, required: true },
+  clientRedirect: { type: String, default: '/' },
   expiresAt: { type: Date, required: true, index: { expireAfterSeconds: 0 } },
 });
 

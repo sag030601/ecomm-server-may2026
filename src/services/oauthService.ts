@@ -250,17 +250,23 @@ export const getConfiguredOAuthProviders = (): OAuthProvider[] => {
 export const isValidOAuthProvider = (provider: string): provider is OAuthProvider =>
   ['google', 'github', 'microsoft'].includes(provider);
 
+/** Returns an in-app path (e.g. `/` or `/products`), never a full origin URL. */
 export const getSafeRedirectUrl = (redirectTo?: string): string => {
-  const fallback = env.CLIENT_URL;
-  if (!redirectTo) return fallback;
+  const fallback = '/';
+  if (!redirectTo?.trim()) return fallback;
+
+  const clientOrigin = new URL(env.CLIENT_URL).origin;
 
   try {
     const url = new URL(redirectTo, env.CLIENT_URL);
-    const clientOrigin = new URL(env.CLIENT_URL).origin;
     if (url.origin !== clientOrigin) return fallback;
     if (url.pathname.startsWith('//')) return fallback;
-    return `${url.pathname}${url.search}${url.hash}`;
+    const path = `${url.pathname}${url.search}${url.hash}`;
+    return path.startsWith('/') ? path : fallback;
   } catch {
+    if (redirectTo.startsWith('/') && !redirectTo.startsWith('//')) {
+      return redirectTo;
+    }
     return fallback;
   }
 };

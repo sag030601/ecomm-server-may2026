@@ -33,6 +33,7 @@ import {
 import { generateOAuthState, generatePkcePair, generateSecureToken } from '../utils/crypto';
 import type { OAuthProvider } from '../models/User';
 import { env } from '../config/env';
+import { logger } from '../utils/logger';
 
 const sendAuthResponse = async (
   user: InstanceType<typeof User>,
@@ -102,6 +103,11 @@ export const login = catchAsync(async (req: AuthRequest, res: Response) => {
 
 export const refresh = catchAsync(async (req: AuthRequest, res: Response) => {
   const refreshToken = getRefreshTokenFromRequest(req);
+  logger.debug('auth.refresh', {
+    hasCookie: !!req.cookies?.refreshToken,
+    hasBodyToken: !!req.body?.refreshToken,
+    cookieNames: Object.keys(req.cookies || {}),
+  });
   if (!refreshToken) {
     throw new AppError('Refresh token required', 401);
   }
@@ -259,12 +265,21 @@ export const startOAuth = catchAsync(async (req: AuthRequest, res: Response) => 
   const state = generateOAuthState();
   const redirectUri = `${env.API_URL.replace(/\/$/, '')}/api/auth/oauth/${provider}/callback`;
 
+  const clientRedirect = getSafeRedirectUrl(req.query.redirect as string | undefined);
+
   await OAuthState.create({
     state,
     provider,
     codeVerifier,
     redirectUri,
+    clientRedirect,
     expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+  });
+
+  logger.info('auth.oauth_start', {
+    provider,
+    clientRedirect,
+    incomingRedirectQuery: req.query.redirect ?? null,
   });
 
   const authUrl = buildAuthorizationUrl(provider, state, codeChallenge);
@@ -315,10 +330,27 @@ export const oauthCallback = catchAsync(async (req: AuthRequest, res: Response) 
     expiresAt: new Date(Date.now() + 60 * 1000),
   });
 
-  const safeRedirect = getSafeRedirectUrl(req.query.redirect as string | undefined);
+  logger.info('auth.oauth_exchange_created', {
+    userId: user._id.toString(),
+    provider,
+    codePrefix: exchangeCode.slice(0, 8),
+    expiresAt: new Date(Date.now() + 60 * 1000).toISOString(),
+    cookieSet: true,
+  });
+
+  const safeRedirect = getSafeRedirectUrl(oauthState.clientRedirect);
   const callbackUrl = new URL(getOAuthCallbackUrl());
   callbackUrl.searchParams.set('code', exchangeCode);
   callbackUrl.searchParams.set('redirect', safeRedirect);
+
+  logger.info('auth.oauth_callback_redirect', {
+    provider,
+    oauthCallbackUrl: getOAuthCallbackUrl(),
+    safeRedirect,
+    storedClientRedirect: oauthState.clientRedirect,
+    exchangeCodePrefix: exchangeCode.slice(0, 8),
+    finalRedirectUrl: callbackUrl.toString(),
+  });
 
   res.redirect(callbackUrl.toString());
 });
@@ -327,12 +359,32 @@ export const exchangeOAuthCode = catchAsync(async (req: AuthRequest, res: Respon
   const { code } = req.body;
   if (!code) throw new AppError('Exchange code required', 400);
 
+  const existing = await OAuthExchange.findOne({ code });
+  logger.info('auth.oauth_exchange_attempt', {
+    codePrefix: String(code).slice(0, 8),
+    lookupFound: !!existing,
+    lookupExpired: existing ? existing.expiresAt <= new Date() : null,
+    cookieNames: Object.keys(req.cookies || {}),
+    hasCookieRefreshToken: !!req.cookies?.refreshToken,
+  });
+
   const exchange = await OAuthExchange.findOneAndDelete({
     code,
     expiresAt: { $gt: new Date() },
   });
 
-  if (!exchange) throw new AppError('Invalid or expired exchange code', 401);
+  if (!exchange) {
+    logger.warn('auth.oauth_exchange_failed', {
+      codePrefix: String(code).slice(0, 8),
+      reason: existing ? 'expired' : 'not_found_or_already_used',
+    });
+    throw new AppError('Invalid or expired exchange code', 401);
+  }
+
+  logger.info('auth.oauth_exchange_success', {
+    userId: exchange.userId.toString(),
+    codePrefix: String(code).slice(0, 8),
+  });
 
   const user = await User.findById(exchange.userId);
   if (!user) throw new AppError('User not found', 404);

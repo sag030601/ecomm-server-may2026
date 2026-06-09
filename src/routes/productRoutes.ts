@@ -9,6 +9,7 @@ import {
   getInventory,
   updateInventory,
   getAllProductsAdmin,
+  validateCartItems,
 } from '../controllers/productController';
 import { protect, restrictTo } from '../middleware/auth';
 import { validate } from '../middleware/validate';
@@ -17,6 +18,7 @@ import { productSchema } from '../validators/schemas';
 const router = Router();
 
 router.get('/', getProducts);
+router.post('/validate-cart', validateCartItems);
 router.get('/admin/all', protect, restrictTo('admin'), getAllProductsAdmin);
 router.get('/inventory', protect, restrictTo('admin'), getInventory);
 router.patch('/:id/inventory', protect, restrictTo('admin'), updateInventory);

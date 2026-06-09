@@ -151,6 +151,93 @@ export const updateInventory = catchAsync(async (req: AuthRequest, res: Response
   res.json({ success: true, product });
 });
 
+export const validateCartItems = catchAsync(async (req: AuthRequest, res: Response) => {
+  const { items } = req.body as {
+    items: Array<{ productId: string; size: string; color?: string; quantity: number }>;
+  };
+
+  if (!Array.isArray(items)) {
+    throw new AppError('Items array is required', 400);
+  }
+
+  const validated: Array<{
+    productId: string;
+    name: string;
+    image: string;
+    price: number;
+    size: string;
+    color?: string;
+    quantity: number;
+    maxStock: number;
+  }> = [];
+  const removed: Array<{ productId: string; size: string; color?: string; reason: string }> = [];
+  const updated: string[] = [];
+
+  for (const item of items) {
+    const product = await Product.findById(item.productId);
+    if (!product || !product.isActive) {
+      removed.push({
+        productId: item.productId,
+        size: item.size,
+        color: item.color,
+        reason: 'Product not found or unavailable',
+      });
+      continue;
+    }
+
+    const sizeVariant = product.sizes.find((s) => s.size === item.size);
+    if (!sizeVariant) {
+      removed.push({
+        productId: item.productId,
+        size: item.size,
+        color: item.color,
+        reason: `Size ${item.size} is not available`,
+      });
+      continue;
+    }
+
+    if (product.colors.length > 0 && item.color && !product.colors.includes(item.color)) {
+      removed.push({
+        productId: item.productId,
+        size: item.size,
+        color: item.color,
+        reason: `Color ${item.color} is not available`,
+      });
+      continue;
+    }
+
+    if (sizeVariant.stock <= 0) {
+      removed.push({
+        productId: item.productId,
+        size: item.size,
+        color: item.color,
+        reason: 'Out of stock',
+      });
+      continue;
+    }
+
+    const quantity = Math.min(item.quantity, sizeVariant.stock);
+    const cartItem = {
+      productId: product._id.toString(),
+      name: product.name,
+      image: product.images[0] || '',
+      price: product.price,
+      size: item.size,
+      color: item.color,
+      quantity,
+      maxStock: sizeVariant.stock,
+    };
+
+    if (quantity < item.quantity) {
+      updated.push(product._id.toString());
+    }
+
+    validated.push(cartItem);
+  }
+
+  res.json({ success: true, items: validated, removed, updated });
+});
+
 export const getAllProductsAdmin = catchAsync(async (_req: AuthRequest, res: Response) => {
   const products = await Product.find()
     .populate('category', 'name')
