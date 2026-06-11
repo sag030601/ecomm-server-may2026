@@ -11,6 +11,9 @@ export const getPublicConfig = catchAsync(async (_req: Request, res: Response) =
     success: true,
     stripeEnabled: isStripeEnabled(),
     stripeDemoMode: isDemoStripeMode(),
+    stripePublishableKey: env.STRIPE_PUBLISHABLE_KEY?.startsWith('pk_')
+      ? env.STRIPE_PUBLISHABLE_KEY
+      : undefined,
     cloudinaryConfigured: isCloudinaryConfigured(),
     oauthProviders: getConfiguredOAuthProviders(),
     oauth: {

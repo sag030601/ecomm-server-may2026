@@ -1,6 +1,5 @@
 import { Router } from 'express';
-import { getDashboardStats, getAnalytics } from '../controllers/adminController';
-import { getAllUsers, getUserById } from '../controllers/authController';
+import { getDashboardStats, getAnalytics, getAllUsers, getUserById } from '../controllers/adminController';
 import { protect, restrictTo } from '../middleware/auth';
 
 const router = Router();

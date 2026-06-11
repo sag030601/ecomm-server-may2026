@@ -1,60 +1,88 @@
 import { Response } from 'express';
-import Review from '../models/Review';
-import Product from '../models/Product';
+import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { AppError } from '../utils/AppError';
 import { catchAsync } from '../utils/catchAsync';
+import { toApiResponse } from '../utils/serialize';
 
 const updateProductRating = async (productId: string) => {
-  const reviews = await Review.find({ product: productId, status: 'approved' });
+  const reviews = await prisma.review.findMany({
+    where: { productId, status: 'approved' },
+    select: { rating: true },
+  });
   const count = reviews.length;
   const avg = count > 0 ? reviews.reduce((sum, r) => sum + r.rating, 0) / count : 0;
-  await Product.findByIdAndUpdate(productId, { rating: Math.round(avg * 10) / 10, reviewCount: count });
+  await prisma.product.update({
+    where: { id: productId },
+    data: { rating: Math.round(avg * 10) / 10, reviewCount: count },
+  });
 };
 
 export const getProductReviews = catchAsync(async (req: AuthRequest, res: Response) => {
-  const reviews = await Review.find({ product: req.params.productId, status: 'approved' })
-    .populate('user', 'name avatar')
-    .sort({ createdAt: -1 });
-  res.json({ success: true, reviews });
+  const reviews = await prisma.review.findMany({
+    where: { productId: String(req.params.productId), status: 'approved' },
+    include: { user: { select: { id: true, name: true, avatar: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json({ success: true, reviews: toApiResponse(reviews) });
 });
 
 export const createReview = catchAsync(async (req: AuthRequest, res: Response) => {
-  const existing = await Review.findOne({ product: req.body.product, user: req.user!._id });
+  const existing = await prisma.review.findUnique({
+    where: {
+      productId_userId: {
+        productId: req.body.product,
+        userId: req.user!.id,
+      },
+    },
+  });
   if (existing) throw new AppError('You have already reviewed this product', 400);
 
-  const review = await Review.create({ ...req.body, user: req.user!._id });
-  res.status(201).json({ success: true, review });
+  const review = await prisma.review.create({
+    data: {
+      productId: req.body.product,
+      userId: req.user!.id,
+      rating: req.body.rating,
+      title: req.body.title,
+      comment: req.body.comment,
+    },
+  });
+  res.status(201).json({ success: true, review: toApiResponse(review) });
 });
 
 export const getAllReviews = catchAsync(async (req: AuthRequest, res: Response) => {
   const { status } = req.query;
-  const filter: Record<string, unknown> = {};
-  if (status) filter.status = status;
-
-  const reviews = await Review.find(filter)
-    .populate('user', 'name email')
-    .populate('product', 'name images')
-    .sort({ createdAt: -1 });
-
-  res.json({ success: true, reviews });
+  const reviews = await prisma.review.findMany({
+    where: status ? { status: status as 'pending' | 'approved' | 'rejected' } : undefined,
+    include: {
+      user: { select: { id: true, name: true, email: true } },
+      product: { select: { id: true, name: true, images: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json({ success: true, reviews: toApiResponse(reviews) });
 });
 
 export const updateReviewStatus = catchAsync(async (req: AuthRequest, res: Response) => {
   const { status } = req.body;
-  const review = await Review.findById(req.params.id);
-  if (!review) throw new AppError('Review not found', 404);
-
-  review.status = status;
-  await review.save();
-  await updateProductRating(review.product.toString());
-
-  res.json({ success: true, review });
+  try {
+    const review = await prisma.review.update({
+      where: { id: String(req.params.id) },
+      data: { status },
+    });
+    await updateProductRating(review.productId);
+    res.json({ success: true, review: toApiResponse(review) });
+  } catch {
+    throw new AppError('Review not found', 404);
+  }
 });
 
 export const deleteReview = catchAsync(async (req: AuthRequest, res: Response) => {
-  const review = await Review.findByIdAndDelete(req.params.id);
-  if (!review) throw new AppError('Review not found', 404);
-  await updateProductRating(review.product.toString());
-  res.json({ success: true, message: 'Review deleted' });
+  try {
+    const review = await prisma.review.delete({ where: { id: String(req.params.id) } });
+    await updateProductRating(review.productId);
+    res.json({ success: true, message: 'Review deleted' });
+  } catch {
+    throw new AppError('Review not found', 404);
+  }
 });

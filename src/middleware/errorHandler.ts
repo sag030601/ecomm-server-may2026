@@ -16,6 +16,11 @@ export const errorHandler = (
     message = `${field} already exists`;
   }
 
+  if (err.name === 'CastError') {
+    statusCode = 404;
+    message = 'Resource not found';
+  }
+
   if (process.env.NODE_ENV === 'development') {
     console.error(err);
   }

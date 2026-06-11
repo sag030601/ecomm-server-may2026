@@ -1,5 +1,5 @@
 import { env, isOAuthProviderConfigured } from '../config/env';
-import type { OAuthProvider } from '../models/User';
+import type { OAuthProvider } from '../types/domain';
 import { AppError } from '../utils/AppError';
 
 export interface OAuthProfile {

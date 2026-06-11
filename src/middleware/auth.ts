@@ -1,13 +1,14 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import User, { IUser } from '../models/User';
+import { User } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/AppError';
 import { catchAsync } from '../utils/catchAsync';
 import { verifyAccessToken, type TokenPayload } from '../services/tokenService';
-import Session from '../models/Session';
+import { hashToken } from '../utils/crypto';
 
 export interface AuthRequest extends Request {
-  user?: IUser;
+  user?: User;
   sessionId?: string;
 }
 
@@ -32,7 +33,7 @@ export const protect = catchAsync(async (req: AuthRequest, _res: Response, next:
     return next(new AppError('Invalid access token.', 401));
   }
 
-  const user = await User.findById(decoded.id);
+  const user = await prisma.user.findUnique({ where: { id: decoded.id } });
   if (!user) {
     return next(new AppError('User no longer exists.', 401));
   }
@@ -58,14 +59,15 @@ export const attachSessionFromRefresh = catchAsync(
   async (req: AuthRequest, _res: Response, next: NextFunction) => {
     const refreshToken = req.cookies?.refreshToken;
     if (refreshToken) {
-      const { hashToken } = await import('../utils/crypto');
-      const session = await Session.findOne({
-        refreshTokenHash: hashToken(refreshToken),
-        revokedAt: { $exists: false },
-        expiresAt: { $gt: new Date() },
+      const session = await prisma.session.findFirst({
+        where: {
+          refreshTokenHash: hashToken(refreshToken),
+          revokedAt: null,
+          expiresAt: { gt: new Date() },
+        },
       });
       if (session) {
-        req.sessionId = session._id.toString();
+        req.sessionId = session.id;
       }
     }
     next();

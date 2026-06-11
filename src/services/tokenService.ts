@@ -1,18 +1,13 @@
 import jwt, { SignOptions } from 'jsonwebtoken';
+import { User } from '@prisma/client';
 import { env } from '../config/env';
+import { prisma } from '../lib/prisma';
 import { generateSecureToken, hashToken } from '../utils/crypto';
-import Session from '../models/Session';
-import User, { IUser } from '../models/User';
+import type { AuthUser } from '../types/domain';
 
 export interface TokenPayload {
   id: string;
   tokenVersion: number;
-}
-
-export interface AuthTokens {
-  accessToken: string;
-  refreshToken: string;
-  expiresIn: string;
 }
 
 const parseDurationMs = (duration: string): number => {
@@ -29,9 +24,9 @@ const parseDurationMs = (duration: string): number => {
   return value * (multipliers[unit] || multipliers.d);
 };
 
-export const generateAccessToken = (user: InstanceType<typeof User>): string => {
+export const generateAccessToken = (user: Pick<User, 'id' | 'tokenVersion'>): string => {
   const payload: TokenPayload = {
-    id: user._id.toString(),
+    id: user.id,
     tokenVersion: user.tokenVersion,
   };
 
@@ -54,47 +49,49 @@ export const createSession = async (
   const refreshTokenHash = hashToken(refreshToken);
   const expiresAt = new Date(Date.now() + parseDurationMs(env.JWT_REFRESH_EXPIRES_IN));
 
-  const session = await Session.create({
-    user: userId,
-    refreshTokenHash,
-    familyId: familyId || generateSecureToken(16),
-    deviceName: reqMeta.deviceName || parseDeviceName(reqMeta.userAgent),
-    ipAddress: reqMeta.ipAddress,
-    userAgent: reqMeta.userAgent,
-    expiresAt,
+  const session = await prisma.session.create({
+    data: {
+      userId,
+      refreshTokenHash,
+      familyId: familyId || generateSecureToken(16),
+      deviceName: reqMeta.deviceName || parseDeviceName(reqMeta.userAgent),
+      ipAddress: reqMeta.ipAddress,
+      userAgent: reqMeta.userAgent,
+      expiresAt,
+    },
   });
 
-  return { refreshToken, sessionId: session._id.toString() };
+  return { refreshToken, sessionId: session.id };
 };
 
 export const rotateRefreshToken = async (
   refreshToken: string,
   reqMeta: { ipAddress: string; userAgent: string }
-): Promise<{ accessToken: string; refreshToken: string; user: InstanceType<typeof User> }> => {
+): Promise<{ accessToken: string; refreshToken: string; user: User }> => {
   const refreshTokenHash = hashToken(refreshToken);
-  const session = await Session.findOne({
-    refreshTokenHash,
-    revokedAt: { $exists: false },
-    expiresAt: { $gt: new Date() },
+  const session = await prisma.session.findFirst({
+    where: {
+      refreshTokenHash,
+      revokedAt: null,
+      expiresAt: { gt: new Date() },
+    },
   });
 
   if (!session) {
     throw new Error('INVALID_REFRESH_TOKEN');
   }
 
-  const user = await User.findById(session.user);
+  const user = await prisma.user.findUnique({ where: { id: session.userId } });
   if (!user) {
     throw new Error('USER_NOT_FOUND');
   }
 
-  session.revokedAt = new Date();
-  await session.save();
+  await prisma.session.update({
+    where: { id: session.id },
+    data: { revokedAt: new Date() },
+  });
 
-  const { refreshToken: newRefreshToken } = await createSession(
-    user._id.toString(),
-    reqMeta,
-    session.familyId
-  );
+  const { refreshToken: newRefreshToken } = await createSession(user.id, reqMeta, session.familyId);
 
   return {
     accessToken: generateAccessToken(user),
@@ -105,37 +102,50 @@ export const rotateRefreshToken = async (
 
 export const revokeSession = async (refreshToken: string): Promise<void> => {
   const refreshTokenHash = hashToken(refreshToken);
-  await Session.updateOne(
-    { refreshTokenHash, revokedAt: { $exists: false } },
-    { revokedAt: new Date() }
-  );
+  await prisma.session.updateMany({
+    where: { refreshTokenHash, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
 };
 
 export const revokeAllUserSessions = async (userId: string): Promise<number> => {
-  const result = await Session.updateMany(
-    { user: userId, revokedAt: { $exists: false } },
-    { revokedAt: new Date() }
-  );
-  await User.findByIdAndUpdate(userId, { $inc: { tokenVersion: 1 } });
-  return result.modifiedCount;
+  const result = await prisma.session.updateMany({
+    where: { userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  await prisma.user.update({
+    where: { id: userId },
+    data: { tokenVersion: { increment: 1 } },
+  });
+  return result.count;
 };
 
 export const revokeSessionById = async (sessionId: string, userId: string): Promise<boolean> => {
-  const result = await Session.updateOne(
-    { _id: sessionId, user: userId, revokedAt: { $exists: false } },
-    { revokedAt: new Date() }
-  );
-  return result.modifiedCount > 0;
+  const result = await prisma.session.updateMany({
+    where: { id: sessionId, userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  return result.count > 0;
 };
 
 export const getUserSessions = async (userId: string) =>
-  Session.find({
-    user: userId,
-    revokedAt: { $exists: false },
-    expiresAt: { $gt: new Date() },
-  })
-    .select('-refreshTokenHash')
-    .sort({ lastUsedAt: -1 });
+  prisma.session.findMany({
+    where: {
+      userId,
+      revokedAt: null,
+      expiresAt: { gt: new Date() },
+    },
+    select: {
+      id: true,
+      deviceName: true,
+      ipAddress: true,
+      userAgent: true,
+      expiresAt: true,
+      lastUsedAt: true,
+      createdAt: true,
+    },
+    orderBy: { lastUsedAt: 'desc' },
+  });
 
 const parseDeviceName = (userAgent: string): string => {
   if (!userAgent) return 'Unknown device';
@@ -146,8 +156,8 @@ const parseDeviceName = (userAgent: string): string => {
   return 'Unknown device';
 };
 
-export const sanitizeUser = (user: IUser) => ({
-  id: user._id,
+export const sanitizeUser = (user: AuthUser | User) => ({
+  id: user.id,
   name: user.name,
   email: user.email,
   role: user.role,

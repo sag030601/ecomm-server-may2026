@@ -1,11 +1,25 @@
+import { Prisma } from '@prisma/client';
 import { Response } from 'express';
-import Product from '../models/Product';
+import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { AppError } from '../utils/AppError';
 import { catchAsync } from '../utils/catchAsync';
+import { toDollars } from '../utils/pricing';
+import { toApiResponse } from '../utils/serialize';
 
 const slugify = (text: string) =>
   text.toLowerCase().replace(/[^\w\s-]/g, '').replace(/[\s_-]+/g, '-').replace(/^-+|-+$/g, '');
+
+const categorySelect = { select: { id: true, name: true, slug: true } };
+
+const mapProductBody = (body: Record<string, unknown>) => {
+  const { category, subcategory, ...rest } = body;
+  return {
+    ...rest,
+    ...(category !== undefined ? { categoryId: category as string } : {}),
+    ...(subcategory !== undefined ? { subcategoryId: (subcategory as string) || null } : {}),
+  };
+};
 
 export const getProducts = catchAsync(async (req: AuthRequest, res: Response) => {
   const {
@@ -25,29 +39,34 @@ export const getProducts = catchAsync(async (req: AuthRequest, res: Response) =>
     crazyDeal,
   } = req.query;
 
-  const filter: Record<string, unknown> = { isActive: true };
+  const where: Prisma.ProductWhereInput = { isActive: true };
 
-  if (category) filter.category = category;
-  if (subcategory) filter.subcategory = subcategory;
+  if (category) where.categoryId = category as string;
+  if (subcategory) where.subcategoryId = subcategory as string;
   if (minPrice || maxPrice) {
-    filter.price = {};
-    if (minPrice) (filter.price as Record<string, number>).$gte = Number(minPrice);
-    if (maxPrice) (filter.price as Record<string, number>).$lte = Number(maxPrice);
+    where.price = {};
+    if (minPrice) where.price.gte = Number(minPrice);
+    if (maxPrice) where.price.lte = Number(maxPrice);
   }
-  if (size) filter['sizes.size'] = size;
-  if (color) filter.colors = color;
-  if (search) filter.$text = { $search: search as string };
-  if (featured === 'true') filter.isFeatured = true;
-  if (bestSeller === 'true') filter.isBestSeller = true;
-  if (specialCombo === 'true') filter.isSpecialCombo = true;
-  if (crazyDeal === 'true') filter.isCrazyDeal = true;
+  if (size) where.sizes = { some: { size: size as string } };
+  if (color) where.colors = { has: color as string };
+  if (search) {
+    where.OR = [
+      { name: { contains: search as string, mode: 'insensitive' } },
+      { description: { contains: search as string, mode: 'insensitive' } },
+    ];
+  }
+  if (featured === 'true') where.isFeatured = true;
+  if (bestSeller === 'true') where.isBestSeller = true;
+  if (specialCombo === 'true') where.isSpecialCombo = true;
+  if (crazyDeal === 'true') where.isCrazyDeal = true;
 
-  const sortOptions: Record<string, Record<string, 1 | -1>> = {
-    newest: { createdAt: -1 },
-    price_asc: { price: 1 },
-    price_desc: { price: -1 },
-    rating: { rating: -1 },
-    name: { name: 1 },
+  const sortMap: Record<string, Prisma.ProductOrderByWithRelationInput> = {
+    newest: { createdAt: 'desc' },
+    price_asc: { price: 'asc' },
+    price_desc: { price: 'desc' },
+    rating: { rating: 'desc' },
+    name: { name: 'asc' },
   };
 
   const pageNum = Math.max(1, parseInt(page as string, 10));
@@ -55,100 +74,125 @@ export const getProducts = catchAsync(async (req: AuthRequest, res: Response) =>
   const skip = (pageNum - 1) * limitNum;
 
   const [products, total] = await Promise.all([
-    Product.find(filter)
-      .populate('category', 'name slug')
-      .populate('subcategory', 'name slug')
-      .sort(sortOptions[sort as string] || sortOptions.newest)
-      .skip(skip)
-      .limit(limitNum),
-    Product.countDocuments(filter),
+    prisma.product.findMany({
+      where,
+      include: { category: categorySelect, subcategory: categorySelect },
+      orderBy: sortMap[sort as string] || sortMap.newest,
+      skip,
+      take: limitNum,
+    }),
+    prisma.product.count({ where }),
   ]);
 
   res.json({
     success: true,
-    products,
+    products: toApiResponse(products),
     pagination: { page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum) },
   });
 });
 
 export const getProduct = catchAsync(async (req: AuthRequest, res: Response) => {
-  const product = await Product.findById(req.params.id)
-    .populate('category', 'name slug')
-    .populate('subcategory', 'name slug');
+  const product = await prisma.product.findUnique({
+    where: { id: String(req.params.id) },
+    include: { category: categorySelect, subcategory: categorySelect },
+  });
 
   if (!product || (!product.isActive && req.user?.role !== 'admin')) {
     throw new AppError('Product not found', 404);
   }
 
-  res.json({ success: true, product });
+  res.json({ success: true, product: toApiResponse(product) });
 });
 
 export const getRelatedProducts = catchAsync(async (req: AuthRequest, res: Response) => {
-  const product = await Product.findById(req.params.id);
+  const product = await prisma.product.findUnique({ where: { id: String(req.params.id) } });
   if (!product) throw new AppError('Product not found', 404);
 
-  const related = await Product.find({
-    _id: { $ne: product._id },
-    category: product.category,
-    isActive: true,
-  })
-    .limit(4)
-    .populate('category', 'name slug');
+  const related = await prisma.product.findMany({
+    where: {
+      id: { not: product.id },
+      categoryId: product.categoryId,
+      isActive: true,
+    },
+    take: 4,
+    include: { category: categorySelect },
+  });
 
-  res.json({ success: true, products: related });
+  res.json({ success: true, products: toApiResponse(related) });
 });
 
 export const createProduct = catchAsync(async (req: AuthRequest, res: Response) => {
-  const slug = slugify(req.body.name);
-  const product = await Product.create({ ...req.body, slug });
-  res.status(201).json({ success: true, product });
+  const product = await prisma.product.create({
+    data: {
+      ...mapProductBody(req.body),
+      slug: slugify(req.body.name),
+    } as Prisma.ProductCreateInput,
+    include: { category: categorySelect, subcategory: categorySelect },
+  });
+  res.status(201).json({ success: true, product: toApiResponse(product) });
 });
 
 export const updateProduct = catchAsync(async (req: AuthRequest, res: Response) => {
-  const updates = { ...req.body };
-  if (updates.name) updates.slug = slugify(updates.name);
+  const data = mapProductBody(req.body) as Prisma.ProductUpdateInput;
+  if (req.body.name) data.slug = slugify(req.body.name);
 
-  const product = await Product.findByIdAndUpdate(req.params.id, updates, {
-    new: true,
-    runValidators: true,
-  });
-
-  if (!product) throw new AppError('Product not found', 404);
-  res.json({ success: true, product });
+  try {
+    const product = await prisma.product.update({
+      where: { id: String(req.params.id) },
+      data,
+      include: { category: categorySelect, subcategory: categorySelect },
+    });
+    res.json({ success: true, product: toApiResponse(product) });
+  } catch {
+    throw new AppError('Product not found', 404);
+  }
 });
 
 export const deleteProduct = catchAsync(async (req: AuthRequest, res: Response) => {
-  const product = await Product.findByIdAndDelete(req.params.id);
-  if (!product) throw new AppError('Product not found', 404);
-  res.json({ success: true, message: 'Product deleted' });
+  try {
+    await prisma.product.delete({ where: { id: String(req.params.id) } });
+    res.json({ success: true, message: 'Product deleted' });
+  } catch {
+    throw new AppError('Product not found', 404);
+  }
 });
 
 export const getInventory = catchAsync(async (_req: AuthRequest, res: Response) => {
-  const products = await Product.find({ isActive: true })
-    .select('name slug images sizes category')
-    .populate('category', 'name');
+  const products = await prisma.product.findMany({
+    where: { isActive: true },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      images: true,
+      sizes: true,
+      category: categorySelect,
+    },
+    orderBy: { name: 'asc' },
+  });
 
   const inventory = products.map((p) => ({
-    _id: p._id,
-    name: p.name,
-    slug: p.slug,
+    ...p,
     image: p.images[0],
-    category: p.category,
-    sizes: p.sizes,
     totalStock: p.sizes.reduce((sum, s) => sum + s.stock, 0),
   }));
 
-  res.json({ success: true, inventory });
+  res.json({ success: true, inventory: toApiResponse(inventory) });
 });
 
 export const updateInventory = catchAsync(async (req: AuthRequest, res: Response) => {
   const { sizes } = req.body;
-  const product = await Product.findById(req.params.id);
-  if (!product) throw new AppError('Product not found', 404);
 
-  product.sizes = sizes;
-  await product.save();
-  res.json({ success: true, product });
+  try {
+    const product = await prisma.product.update({
+      where: { id: String(req.params.id) },
+      data: { sizes },
+      include: { category: categorySelect },
+    });
+    res.json({ success: true, product: toApiResponse(product) });
+  } catch {
+    throw new AppError('Product not found', 404);
+  }
 });
 
 export const validateCartItems = catchAsync(async (req: AuthRequest, res: Response) => {
@@ -173,8 +217,23 @@ export const validateCartItems = catchAsync(async (req: AuthRequest, res: Respon
   const removed: Array<{ productId: string; size: string; color?: string; reason: string }> = [];
   const updated: string[] = [];
 
+  const merged = new Map<string, (typeof items)[0]>();
   for (const item of items) {
-    const product = await Product.findById(item.productId);
+    const key = `${item.productId}-${item.size}-${item.color?.trim() || ''}`;
+    const existing = merged.get(key);
+    if (existing) {
+      existing.quantity += item.quantity;
+    } else {
+      merged.set(key, {
+        ...item,
+        color: item.color?.trim() || undefined,
+        quantity: item.quantity,
+      });
+    }
+  }
+
+  for (const item of merged.values()) {
+    const product = await prisma.product.findUnique({ where: { id: item.productId } });
     if (!product || !product.isActive) {
       removed.push({
         productId: item.productId,
@@ -218,10 +277,10 @@ export const validateCartItems = catchAsync(async (req: AuthRequest, res: Respon
 
     const quantity = Math.min(item.quantity, sizeVariant.stock);
     const cartItem = {
-      productId: product._id.toString(),
+      productId: product.id,
       name: product.name,
       image: product.images[0] || '',
-      price: product.price,
+      price: toDollars(product.price),
       size: item.size,
       color: item.color,
       quantity,
@@ -229,7 +288,7 @@ export const validateCartItems = catchAsync(async (req: AuthRequest, res: Respon
     };
 
     if (quantity < item.quantity) {
-      updated.push(product._id.toString());
+      updated.push(product.id);
     }
 
     validated.push(cartItem);
@@ -239,9 +298,9 @@ export const validateCartItems = catchAsync(async (req: AuthRequest, res: Respon
 });
 
 export const getAllProductsAdmin = catchAsync(async (_req: AuthRequest, res: Response) => {
-  const products = await Product.find()
-    .populate('category', 'name')
-    .populate('subcategory', 'name')
-    .sort({ createdAt: -1 });
-  res.json({ success: true, products });
+  const products = await prisma.product.findMany({
+    include: { category: { select: { id: true, name: true } }, subcategory: { select: { id: true, name: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json({ success: true, products: toApiResponse(products) });
 });

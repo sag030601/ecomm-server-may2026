@@ -1,9 +1,8 @@
 import { Request, Response } from 'express';
-import Order from '../models/Order';
-import Product from '../models/Product';
-import Coupon from '../models/Coupon';
+import { prisma } from '../lib/prisma';
 import { catchAsync } from '../utils/catchAsync';
 import { getStripe } from '../config/stripe';
+import { finalizePaidOrder } from '../services/orderPaymentService';
 import { isCloudinaryConfigured } from '../config/cloudinary';
 import { uploadFromBuffer } from '../utils/cloudinaryUpload';
 import { AppError } from '../utils/AppError';
@@ -25,22 +24,25 @@ export const handleWebhook = catchAsync(async (req: Request, res: Response) => {
     const orderId = paymentIntent.metadata.orderId;
 
     if (orderId) {
-      const order = await Order.findById(orderId);
+      const order = await prisma.order.findUnique({ where: { id: orderId } });
       if (order && order.paymentStatus !== 'paid') {
-        for (const item of order.items) {
-          await Product.updateOne(
-            { _id: item.product, 'sizes.size': item.size },
-            { $inc: { 'sizes.$.stock': -item.quantity } }
-          );
-        }
+        await finalizePaidOrder(order);
+      }
+    }
+  }
 
-        if (order.coupon) {
-          await Coupon.updateOne({ _id: order.coupon }, { $inc: { usedCount: 1 } });
-        }
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const orderId = session.client_reference_id || session.metadata?.orderId;
 
-        order.paymentStatus = 'paid';
-        order.orderStatus = 'confirmed';
-        await order.save();
+    if (orderId) {
+      const order = await prisma.order.findUnique({ where: { id: orderId } });
+      if (order && order.paymentStatus !== 'paid') {
+        await prisma.order.update({
+          where: { id: order.id },
+          data: { stripeCheckoutSessionId: session.id },
+        });
+        await finalizePaidOrder(order);
       }
     }
   }

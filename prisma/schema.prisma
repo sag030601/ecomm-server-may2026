@@ -1,0 +1,299 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  customer
+  admin
+}
+
+enum OAuthProvider {
+  google
+  github
+  microsoft
+}
+
+enum PaymentMethod {
+  stripe
+  cod
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  failed
+  refunded
+}
+
+enum OrderStatus {
+  pending
+  confirmed
+  processing
+  shipped
+  delivered
+  cancelled
+}
+
+enum DiscountType {
+  percentage
+  fixed
+}
+
+enum ReviewStatus {
+  pending
+  approved
+  rejected
+}
+
+type Address {
+  id        String?
+  label     String
+  street    String
+  city      String
+  state     String
+  zipCode   String
+  country   String  @default("US")
+  isDefault Boolean @default(false)
+}
+
+type OAuthAccount {
+  provider   OAuthProvider
+  providerId String
+  email      String
+  linkedAt   DateTime      @default(now())
+}
+
+type ProductSize {
+  size  String
+  stock Int
+  sku   String?
+}
+
+type OrderItem {
+  product  String  @db.ObjectId
+  name     String
+  image    String
+  price    Float
+  size     String
+  color    String?
+  quantity Int
+}
+
+type ShippingAddress {
+  street  String
+  city    String
+  state   String
+  zipCode String
+  country String @default("US")
+}
+
+model User {
+  id            String         @id @default(auto()) @map("_id") @db.ObjectId
+  name          String
+  email         String         @unique
+  password      String?
+  role          Role           @default(customer)
+  phone         String?
+  addresses     Address[]
+  avatar        String?
+  emailVerified Boolean        @default(false)
+  oauthAccounts OAuthAccount[]
+  tokenVersion  Int            @default(0)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  sessions Session[]
+  orders   Order[]
+  reviews  Review[]
+
+  @@map("users")
+}
+
+model Category {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  slug        String   @unique
+  description String?
+  image       String?
+  parentId    String?  @map("parent") @db.ObjectId
+  parent      Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children    Category[] @relation("CategoryHierarchy")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  products          Product[] @relation("ProductCategory")
+  subcategoryProducts Product[] @relation("ProductSubcategory")
+
+  @@map("categories")
+}
+
+model Product {
+  id              String        @id @default(auto()) @map("_id") @db.ObjectId
+  name            String
+  slug            String        @unique
+  description     String
+  price           Float
+  compareAtPrice  Float?
+  categoryId      String        @map("category") @db.ObjectId
+  category        Category      @relation("ProductCategory", fields: [categoryId], references: [id])
+  subcategoryId   String?       @map("subcategory") @db.ObjectId
+  subcategory     Category?     @relation("ProductSubcategory", fields: [subcategoryId], references: [id])
+  images          String[]
+  colors          String[]
+  sizes           ProductSize[]
+  tags            String[]
+  isFeatured      Boolean       @default(false)
+  isBestSeller    Boolean       @default(false)
+  isSpecialCombo  Boolean       @default(false)
+  isCrazyDeal     Boolean       @default(false)
+  rating          Float         @default(0)
+  reviewCount     Int           @default(0)
+  isActive        Boolean       @default(true)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  reviews Review[]
+
+  @@index([categoryId, price])
+  @@map("products")
+}
+
+model Order {
+  id                    String          @id @default(auto()) @map("_id") @db.ObjectId
+  userId                String          @map("user") @db.ObjectId
+  user                  User            @relation(fields: [userId], references: [id])
+  orderNumber           String          @unique
+  items                 OrderItem[]
+  shippingAddress       ShippingAddress
+  paymentMethod         PaymentMethod
+  paymentStatus         PaymentStatus   @default(pending)
+  orderStatus           OrderStatus     @default(pending)
+  subtotal              Float
+  discount              Float           @default(0)
+  shippingCost          Float           @default(0)
+  total                 Float
+  couponId              String?         @map("coupon") @db.ObjectId
+  coupon                Coupon?         @relation(fields: [couponId], references: [id])
+  stripePaymentIntentId String?
+  stripeCheckoutSessionId String?
+  notes                 String?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([orderStatus])
+  @@map("orders")
+}
+
+model Coupon {
+  id             String       @id @default(auto()) @map("_id") @db.ObjectId
+  code           String       @unique
+  description    String?
+  discountType   DiscountType
+  discountValue  Float
+  minOrderAmount Float        @default(0)
+  maxDiscount    Float?
+  usageLimit     Int          @default(100)
+  usedCount      Int          @default(0)
+  expiresAt      DateTime
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  orders Order[]
+
+  @@map("coupons")
+}
+
+model Review {
+  id        String       @id @default(auto()) @map("_id") @db.ObjectId
+  productId String       @map("product") @db.ObjectId
+  product   Product      @relation(fields: [productId], references: [id])
+  userId    String       @map("user") @db.ObjectId
+  user      User         @relation(fields: [userId], references: [id])
+  rating    Int
+  title     String?
+  comment   String
+  status    ReviewStatus @default(pending)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@unique([productId, userId])
+  @@map("reviews")
+}
+
+model Banner {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  title     String
+  subtitle  String?
+  image     String
+  link      String?
+  position  Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("banners")
+}
+
+model Session {
+  id               String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId           String    @map("user") @db.ObjectId
+  user             User      @relation(fields: [userId], references: [id])
+  refreshTokenHash String    @unique
+  familyId         String
+  deviceName       String    @default("Unknown device")
+  ipAddress        String    @default("")
+  userAgent        String    @default("")
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  lastUsedAt       DateTime  @default(now())
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([userId, revokedAt])
+  @@map("sessions")
+}
+
+model AuditLog {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  action    String
+  userId    String?  @db.ObjectId
+  ipAddress String   @default("")
+  userAgent String   @default("")
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([action])
+  @@index([userId])
+  @@index([createdAt(sort: Desc)])
+  @@map("auditlogs")
+}
+
+model OAuthState {
+  id             String        @id @default(auto()) @map("_id") @db.ObjectId
+  state          String        @unique
+  provider       OAuthProvider
+  codeVerifier   String
+  redirectUri    String
+  clientRedirect String        @default("/")
+  expiresAt      DateTime
+
+  @@map("oauthstates")
+}
+
+model OAuthExchange {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  code         String   @unique
+  refreshToken String
+  userId       String   @db.ObjectId
+  expiresAt    DateTime
+
+  @@map("oauthexchanges")
+}

@@ -1,46 +1,56 @@
 import { Response } from 'express';
-import Coupon from '../models/Coupon';
+import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { AppError } from '../utils/AppError';
 import { catchAsync } from '../utils/catchAsync';
+import { toApiResponse } from '../utils/serialize';
 
 export const getCoupons = catchAsync(async (_req: AuthRequest, res: Response) => {
-  const coupons = await Coupon.find().sort({ createdAt: -1 });
-  res.json({ success: true, coupons });
+  const coupons = await prisma.coupon.findMany({ orderBy: { createdAt: 'desc' } });
+  res.json({ success: true, coupons: toApiResponse(coupons) });
 });
 
 export const createCoupon = catchAsync(async (req: AuthRequest, res: Response) => {
-  const coupon = await Coupon.create({
-    ...req.body,
-    code: req.body.code.toUpperCase(),
-    expiresAt: new Date(req.body.expiresAt),
+  const coupon = await prisma.coupon.create({
+    data: {
+      ...req.body,
+      code: req.body.code.toUpperCase(),
+      expiresAt: new Date(req.body.expiresAt),
+    },
   });
-  res.status(201).json({ success: true, coupon });
+  res.status(201).json({ success: true, coupon: toApiResponse(coupon) });
 });
 
 export const updateCoupon = catchAsync(async (req: AuthRequest, res: Response) => {
-  const updates = { ...req.body };
-  if (updates.code) updates.code = updates.code.toUpperCase();
-  if (updates.expiresAt) updates.expiresAt = new Date(updates.expiresAt);
+  const data = { ...req.body };
+  if (data.code) data.code = data.code.toUpperCase();
+  if (data.expiresAt) data.expiresAt = new Date(data.expiresAt);
 
-  const coupon = await Coupon.findByIdAndUpdate(req.params.id, updates, {
-    new: true,
-    runValidators: true,
-  });
-
-  if (!coupon) throw new AppError('Coupon not found', 404);
-  res.json({ success: true, coupon });
+  try {
+    const coupon = await prisma.coupon.update({
+      where: { id: String(req.params.id) },
+      data,
+    });
+    res.json({ success: true, coupon: toApiResponse(coupon) });
+  } catch {
+    throw new AppError('Coupon not found', 404);
+  }
 });
 
 export const deleteCoupon = catchAsync(async (req: AuthRequest, res: Response) => {
-  const coupon = await Coupon.findByIdAndDelete(req.params.id);
-  if (!coupon) throw new AppError('Coupon not found', 404);
-  res.json({ success: true, message: 'Coupon deleted' });
+  try {
+    await prisma.coupon.delete({ where: { id: String(req.params.id) } });
+    res.json({ success: true, message: 'Coupon deleted' });
+  } catch {
+    throw new AppError('Coupon not found', 404);
+  }
 });
 
 export const validateCoupon = catchAsync(async (req: AuthRequest, res: Response) => {
   const { code, subtotal } = req.body;
-  const coupon = await Coupon.findOne({ code: code.toUpperCase(), isActive: true });
+  const coupon = await prisma.coupon.findFirst({
+    where: { code: code.toUpperCase(), isActive: true },
+  });
 
   if (!coupon) throw new AppError('Invalid coupon code', 400);
   if (coupon.expiresAt < new Date()) throw new AppError('Coupon has expired', 400);
@@ -57,5 +67,5 @@ export const validateCoupon = catchAsync(async (req: AuthRequest, res: Response)
     discount = coupon.discountValue;
   }
 
-  res.json({ success: true, coupon, discount: Math.min(discount, subtotal) });
+  res.json({ success: true, coupon: toApiResponse(coupon), discount: Math.min(discount, subtotal) });
 });

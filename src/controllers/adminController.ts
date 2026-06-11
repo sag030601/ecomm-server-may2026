@@ -1,10 +1,20 @@
 import { Response } from 'express';
-import Order from '../models/Order';
-import Product from '../models/Product';
-import User from '../models/User';
-import Review from '../models/Review';
+import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
+import { AppError } from '../utils/AppError';
 import { catchAsync } from '../utils/catchAsync';
+import { toApiResponse } from '../utils/serialize';
+
+type AggregateResult<T> = { cursor: { firstBatch: T[] } };
+
+const runAggregate = async <T>(pipeline: object[]): Promise<T[]> => {
+  const result = (await prisma.$runCommandRaw({
+    aggregate: 'orders',
+    pipeline,
+    cursor: {},
+  })) as AggregateResult<T>;
+  return result.cursor?.firstBatch ?? [];
+};
 
 export const getDashboardStats = catchAsync(async (_req: AuthRequest, res: Response) => {
   const thirtyDaysAgo = new Date();
@@ -12,7 +22,7 @@ export const getDashboardStats = catchAsync(async (_req: AuthRequest, res: Respo
 
   const [
     totalOrders,
-    totalRevenue,
+    revenueAgg,
     totalCustomers,
     totalProducts,
     pendingOrders,
@@ -20,21 +30,27 @@ export const getDashboardStats = catchAsync(async (_req: AuthRequest, res: Respo
     recentOrders,
     monthlySales,
   ] = await Promise.all([
-    Order.countDocuments(),
-    Order.aggregate([
+    prisma.order.count(),
+    runAggregate<{ total: number }>([
       { $match: { paymentStatus: 'paid' } },
       { $group: { _id: null, total: { $sum: '$total' } } },
     ]),
-    User.countDocuments({ role: 'customer' }),
-    Product.countDocuments({ isActive: true }),
-    Order.countDocuments({ orderStatus: 'pending' }),
-    Review.countDocuments({ status: 'pending' }),
-    Order.find()
-      .populate('user', 'name email')
-      .sort({ createdAt: -1 })
-      .limit(5),
-    Order.aggregate([
-      { $match: { createdAt: { $gte: thirtyDaysAgo }, paymentStatus: { $in: ['paid', 'pending'] } } },
+    prisma.user.count({ where: { role: 'customer' } }),
+    prisma.product.count({ where: { isActive: true } }),
+    prisma.order.count({ where: { orderStatus: 'pending' } }),
+    prisma.review.count({ where: { status: 'pending' } }),
+    prisma.order.findMany({
+      include: { user: { select: { id: true, name: true, email: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+    }),
+    runAggregate<{ _id: string; revenue: number; orders: number }>([
+      {
+        $match: {
+          createdAt: { $gte: thirtyDaysAgo },
+          paymentStatus: { $in: ['paid', 'pending'] },
+        },
+      },
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
@@ -50,13 +66,13 @@ export const getDashboardStats = catchAsync(async (_req: AuthRequest, res: Respo
     success: true,
     stats: {
       totalOrders,
-      totalRevenue: totalRevenue[0]?.total || 0,
+      totalRevenue: revenueAgg[0]?.total || 0,
       totalCustomers,
       totalProducts,
       pendingOrders,
       pendingReviews,
     },
-    recentOrders,
+    recentOrders: toApiResponse(recentOrders),
     monthlySales,
   });
 });
@@ -66,9 +82,11 @@ export const getAnalytics = catchAsync(async (req: AuthRequest, res: Response) =
   const daysAgo = new Date();
   daysAgo.setDate(daysAgo.getDate() - parseInt(period as string, 10));
 
+  const dateMatch = { createdAt: { $gte: daysAgo } };
+
   const [salesByDay, topProducts, ordersByStatus, revenueByCategory] = await Promise.all([
-    Order.aggregate([
-      { $match: { createdAt: { $gte: daysAgo } } },
+    runAggregate<{ _id: string; revenue: number; orders: number }>([
+      { $match: dateMatch },
       {
         $group: {
           _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
@@ -78,8 +96,8 @@ export const getAnalytics = catchAsync(async (req: AuthRequest, res: Response) =
       },
       { $sort: { _id: 1 } },
     ]),
-    Order.aggregate([
-      { $match: { createdAt: { $gte: daysAgo } } },
+    runAggregate<{ _id: string; name: string; totalSold: number; revenue: number }>([
+      { $match: dateMatch },
       { $unwind: '$items' },
       {
         $group: {
@@ -92,12 +110,12 @@ export const getAnalytics = catchAsync(async (req: AuthRequest, res: Response) =
       { $sort: { totalSold: -1 } },
       { $limit: 10 },
     ]),
-    Order.aggregate([
-      { $match: { createdAt: { $gte: daysAgo } } },
+    runAggregate<{ _id: string; count: number }>([
+      { $match: dateMatch },
       { $group: { _id: '$orderStatus', count: { $sum: 1 } } },
     ]),
-    Order.aggregate([
-      { $match: { createdAt: { $gte: daysAgo } } },
+    runAggregate<{ _id: string; revenue: number }>([
+      { $match: dateMatch },
       { $unwind: '$items' },
       {
         $lookup: {
@@ -134,4 +152,46 @@ export const getAnalytics = catchAsync(async (req: AuthRequest, res: Response) =
     ordersByStatus,
     revenueByCategory,
   });
+});
+
+export const getAllUsers = catchAsync(async (_req: AuthRequest, res: Response) => {
+  const users = await prisma.user.findMany({
+    where: { role: 'customer' },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      phone: true,
+      avatar: true,
+      emailVerified: true,
+      createdAt: true,
+      updatedAt: true,
+      addresses: true,
+      oauthAccounts: true,
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+  res.json({ success: true, users: toApiResponse(users), count: users.length });
+});
+
+export const getUserById = catchAsync(async (req: AuthRequest, res: Response) => {
+  const user = await prisma.user.findUnique({
+    where: { id: String(req.params.id) },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      phone: true,
+      avatar: true,
+      emailVerified: true,
+      createdAt: true,
+      updatedAt: true,
+      addresses: true,
+      oauthAccounts: true,
+    },
+  });
+  if (!user) throw new AppError('User not found', 404);
+  res.json({ success: true, user: toApiResponse(user) });
 });

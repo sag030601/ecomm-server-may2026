@@ -4,14 +4,24 @@ import { AppError } from '../utils/AppError';
 
 let stripeInstance: Stripe | null = null;
 
-const isStripeConfigured = (): boolean => {
-  const key = env.STRIPE_SECRET_KEY;
-  return !!key && key !== 'sk_test_your_stripe_secret_key';
+const isValidStripeSecretKey = (key: string | undefined): boolean => {
+  if (!key) return false;
+  if (key === 'sk_test_your_stripe_secret_key') return false;
+  return /^(sk|rk)_(test|live)_/.test(key);
 };
 
+const isStripeApiConfigured = (): boolean => isValidStripeSecretKey(env.STRIPE_SECRET_KEY);
+
+const isPaymentLinkConfigured = (): boolean => {
+  const url = env.STRIPE_PAYMENT_LINK_URL;
+  return !!url && url.includes('buy.stripe.com/');
+};
+
+const isStripeConfigured = (): boolean => isStripeApiConfigured() || isPaymentLinkConfigured();
+
 export const getStripe = (): Stripe => {
-  if (!isStripeConfigured()) {
-    throw new AppError('Stripe is not configured. Add STRIPE_SECRET_KEY to your .env file.', 503);
+  if (!isStripeApiConfigured()) {
+    throw new AppError('Stripe API is not configured. Add STRIPE_SECRET_KEY to your .env file.', 503);
   }
 
   if (!stripeInstance) {
@@ -26,3 +36,5 @@ export const getStripe = (): Stripe => {
 export const isStripeEnabled = isStripeConfigured;
 
 export const isDemoStripeMode = (): boolean => !isStripeConfigured();
+
+export { isStripeApiConfigured, isPaymentLinkConfigured };

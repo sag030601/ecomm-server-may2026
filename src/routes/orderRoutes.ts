@@ -6,6 +6,7 @@ import {
   getAllOrders,
   updateOrderStatus,
   confirmStripePayment,
+  confirmCheckoutSession,
   confirmDemoPayment,
 } from '../controllers/orderController';
 import { protect, restrictTo } from '../middleware/auth';
@@ -19,6 +20,7 @@ router.get('/my', protect, getMyOrders);
 router.get('/admin/all', protect, restrictTo('admin'), getAllOrders);
 router.get('/:id', protect, getOrder);
 router.patch('/:id/status', protect, restrictTo('admin'), updateOrderStatus);
+router.post('/confirm-checkout', protect, confirmCheckoutSession);
 router.post('/:id/confirm-payment', protect, confirmStripePayment);
 router.post('/:id/demo-payment', protect, confirmDemoPayment);
 

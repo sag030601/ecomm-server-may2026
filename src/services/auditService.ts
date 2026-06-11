@@ -1,4 +1,5 @@
-import AuditLog from '../models/AuditLog';
+import { Prisma } from '@prisma/client';
+import { prisma } from '../lib/prisma';
 import { logger } from '../utils/logger';
 
 export const recordAudit = async (
@@ -11,12 +12,14 @@ export const recordAudit = async (
   }
 ): Promise<void> => {
   try {
-    await AuditLog.create({
-      action,
-      userId: meta.userId,
-      ipAddress: meta.ipAddress || '',
-      userAgent: meta.userAgent || '',
-      metadata: meta.metadata || {},
+    await prisma.auditLog.create({
+      data: {
+        action,
+        userId: meta.userId,
+        ipAddress: meta.ipAddress || '',
+        userAgent: meta.userAgent || '',
+        metadata: (meta.metadata || {}) as Prisma.InputJsonValue,
+      },
     });
     logger.info(`Audit: ${action}`, { userId: meta.userId, ...meta.metadata });
   } catch (error) {
