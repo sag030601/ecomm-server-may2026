@@ -2,7 +2,7 @@
   "name": "ecommerce-backend",
   "version": "1.0.0",
   "description": "Ecommerce REST API",
-  "main": "dist/app.js",
+  "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
