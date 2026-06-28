@@ -75,7 +75,7 @@ export const orderSchema = z.object({
       zipCode: z.string(),
       country: z.string().default('US'),
     }),
-    paymentMethod: z.enum(['stripe', 'cod']),
+    paymentMethod: z.literal('stripe'),
     couponCode: z.string().optional(),
     notes: z.string().optional(),
   }),

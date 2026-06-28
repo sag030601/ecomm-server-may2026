@@ -4,9 +4,8 @@ import { prisma } from '../lib/prisma';
 import { AuthRequest } from '../middleware/auth';
 import { AppError } from '../utils/AppError';
 import { catchAsync } from '../utils/catchAsync';
-import { getStripe, isStripeEnabled, isPaymentLinkConfigured, isStripeApiConfigured } from '../config/stripe';
-import { isDevelopment, env } from '../config/env';
-import { buildPaymentLinkUrl } from '../utils/stripeCheckout';
+import { getStripe, isStripeEnabled, isStripeApiConfigured } from '../config/stripe';
+import { isDevelopment } from '../config/env';
 import { finalizePaidOrder } from '../services/orderPaymentService';
 import { mergeOrderLineItems } from '../utils/orderItems';
 import {
@@ -16,6 +15,7 @@ import {
   logPaymentCalculation,
   assertStripeAmountMatches,
 } from '../utils/pricing';
+import { createStripeCheckoutSession } from '../utils/stripeCheckoutSession';
 import { logger } from '../utils/logger';
 import { toApiResponse } from '../utils/serialize';
 
@@ -59,6 +59,10 @@ const decrementStock = async (productId: string, size: string, quantity: number)
 
 export const createOrder = catchAsync(async (req: AuthRequest, res: Response) => {
   const { shippingAddress, paymentMethod, couponCode, notes } = req.body;
+
+  if (paymentMethod !== 'stripe') {
+    throw new AppError('Only card payment via Stripe is supported', 400);
+  }
   const mergedItems = mergeOrderLineItems(req.body.items);
 
   const orderItems: Prisma.OrderCreateInput['items'] = [];
@@ -152,22 +156,12 @@ export const createOrder = catchAsync(async (req: AuthRequest, res: Response) =>
         .map((line) => `${line.name} (${line.size}) x${line.quantity}`)
         .join('; ');
 
-      const session = await getStripe().checkout.sessions.create({
-        mode: 'payment',
-        line_items: [
-          {
-            price_data: {
-              currency: 'usd',
-              product_data: {
-                name: `Order ${order.orderNumber}`,
-                description: itemSummary.slice(0, 500),
-              },
-              unit_amount: stripeCents,
-            },
-            quantity: 1,
-          },
-        ],
-        client_reference_id: order.id,
+      const session = await createStripeCheckoutSession(getStripe(), {
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        customerEmail: req.user!.email,
+        stripeCents,
+        itemSummary,
         metadata: {
           orderId: order.id,
           orderNumber: order.orderNumber,
@@ -177,8 +171,6 @@ export const createOrder = catchAsync(async (req: AuthRequest, res: Response) =>
           total: String(total),
           stripeCents: String(stripeCents),
         },
-        success_url: `${env.CLIENT_URL}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${env.CLIENT_URL}/checkout?cancelled=true`,
       });
 
       if (session.amount_total != null && session.amount_total !== stripeCents) {
@@ -203,33 +195,10 @@ export const createOrder = catchAsync(async (req: AuthRequest, res: Response) =>
       });
     }
 
-    if (isPaymentLinkConfigured()) {
-      const checkoutUrl = buildPaymentLinkUrl(order.id, req.user!.email);
-      return res.status(201).json({
-        success: true,
-        order: toApiResponse(order),
-        checkoutUrl,
-      });
-    }
+    throw new AppError('Stripe is not configured. Add STRIPE_SECRET_KEY to your .env file.', 503);
   }
 
-  for (const item of mergedItems) {
-    await decrementStock(item.product, item.size, item.quantity);
-  }
-
-  if (coupon) {
-    await prisma.coupon.update({
-      where: { id: coupon.id },
-      data: { usedCount: { increment: 1 } },
-    });
-  }
-
-  const confirmedOrder = await prisma.order.update({
-    where: { id: order.id },
-    data: { orderStatus: 'confirmed' },
-  });
-
-  res.status(201).json({ success: true, order: toApiResponse(confirmedOrder) });
+  throw new AppError('Only card payment via Stripe is supported', 400);
 });
 
 export const getMyOrders = catchAsync(async (req: AuthRequest, res: Response) => {
@@ -364,7 +333,15 @@ export const confirmCheckoutSession = catchAsync(async (req: AuthRequest, res: R
     data: { stripeCheckoutSessionId: session.id },
   });
 
-  await finalizePaidOrder(order);
+  try {
+    await finalizePaidOrder(order);
+  } catch (error) {
+    const updated = await prisma.order.findUnique({ where: { id: order.id } });
+    if (updated?.paymentStatus === 'paid') {
+      return res.json({ success: true, order: toApiResponse(updated) });
+    }
+    throw error;
+  }
 
   const updated = await prisma.order.findUnique({ where: { id: order.id } });
   res.json({ success: true, order: toApiResponse(updated) });
