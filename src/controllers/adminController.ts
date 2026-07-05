@@ -5,15 +5,20 @@ import { AppError } from '../utils/AppError';
 import { catchAsync } from '../utils/catchAsync';
 import { toApiResponse } from '../utils/serialize';
 
-type AggregateResult<T> = { cursor: { firstBatch: T[] } };
+const dateKey = (date: Date) => date.toISOString().slice(0, 10);
 
-const runAggregate = async <T>(pipeline: object[]): Promise<T[]> => {
-  const result = (await prisma.$runCommandRaw({
-    aggregate: 'orders',
-    pipeline,
-    cursor: {},
-  })) as AggregateResult<T>;
-  return result.cursor?.firstBatch ?? [];
+const groupSalesByDay = (orders: { createdAt: Date; total: number }[]) => {
+  const map = new Map<string, { revenue: number; orders: number }>();
+  for (const order of orders) {
+    const key = dateKey(order.createdAt);
+    const current = map.get(key) ?? { revenue: 0, orders: 0 };
+    current.revenue += order.total;
+    current.orders += 1;
+    map.set(key, current);
+  }
+  return [...map.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([_id, stats]) => ({ _id, ...stats }));
 };
 
 export const getDashboardStats = catchAsync(async (_req: AuthRequest, res: Response) => {
@@ -22,19 +27,19 @@ export const getDashboardStats = catchAsync(async (_req: AuthRequest, res: Respo
 
   const [
     totalOrders,
-    revenueAgg,
+    revenueResult,
     totalCustomers,
     totalProducts,
     pendingOrders,
     pendingReviews,
     recentOrders,
-    monthlySales,
+    paidOrdersLast30,
   ] = await Promise.all([
     prisma.order.count(),
-    runAggregate<{ total: number }>([
-      { $match: { paymentStatus: 'paid' } },
-      { $group: { _id: null, total: { $sum: '$total' } } },
-    ]),
+    prisma.order.aggregate({
+      _sum: { total: true },
+      where: { paymentStatus: 'paid' },
+    }),
     prisma.user.count({ where: { role: 'customer' } }),
     prisma.product.count({ where: { isActive: true } }),
     prisma.order.count({ where: { orderStatus: 'pending' } }),
@@ -44,106 +49,101 @@ export const getDashboardStats = catchAsync(async (_req: AuthRequest, res: Respo
       orderBy: { createdAt: 'desc' },
       take: 5,
     }),
-    runAggregate<{ _id: string; revenue: number; orders: number }>([
-      {
-        $match: {
-          createdAt: { $gte: thirtyDaysAgo },
-          paymentStatus: { $in: ['paid', 'pending'] },
-        },
+    prisma.order.findMany({
+      where: {
+        createdAt: { gte: thirtyDaysAgo },
+        paymentStatus: 'paid',
       },
-      {
-        $group: {
-          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
-          revenue: { $sum: '$total' },
-          orders: { $sum: 1 },
-        },
-      },
-      { $sort: { _id: 1 } },
-    ]),
+      select: { createdAt: true, total: true },
+    }),
   ]);
 
   res.json({
     success: true,
     stats: {
       totalOrders,
-      totalRevenue: revenueAgg[0]?.total || 0,
+      totalRevenue: revenueResult._sum.total ?? 0,
       totalCustomers,
       totalProducts,
       pendingOrders,
       pendingReviews,
     },
     recentOrders: toApiResponse(recentOrders),
-    monthlySales,
+    monthlySales: groupSalesByDay(paidOrdersLast30),
   });
 });
 
 export const getAnalytics = catchAsync(async (req: AuthRequest, res: Response) => {
   const { period = '30' } = req.query;
-  const daysAgo = new Date();
-  daysAgo.setDate(daysAgo.getDate() - parseInt(period as string, 10));
+  const days = parseInt(period as string, 10) || 30;
+  const since = new Date();
+  since.setDate(since.getDate() - days);
 
-  const dateMatch = { createdAt: { $gte: daysAgo } };
+  const orders = await prisma.order.findMany({
+    where: { createdAt: { gte: since } },
+    select: {
+      createdAt: true,
+      total: true,
+      paymentStatus: true,
+      orderStatus: true,
+      items: true,
+    },
+  });
 
-  const [salesByDay, topProducts, ordersByStatus, revenueByCategory] = await Promise.all([
-    runAggregate<{ _id: string; revenue: number; orders: number }>([
-      { $match: dateMatch },
-      {
-        $group: {
-          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
-          revenue: { $sum: '$total' },
-          orders: { $sum: 1 },
-        },
-      },
-      { $sort: { _id: 1 } },
-    ]),
-    runAggregate<{ _id: string; name: string; totalSold: number; revenue: number }>([
-      { $match: dateMatch },
-      { $unwind: '$items' },
-      {
-        $group: {
-          _id: '$items.product',
-          name: { $first: '$items.name' },
-          totalSold: { $sum: '$items.quantity' },
-          revenue: { $sum: { $multiply: ['$items.price', '$items.quantity'] } },
-        },
-      },
-      { $sort: { totalSold: -1 } },
-      { $limit: 10 },
-    ]),
-    runAggregate<{ _id: string; count: number }>([
-      { $match: dateMatch },
-      { $group: { _id: '$orderStatus', count: { $sum: 1 } } },
-    ]),
-    runAggregate<{ _id: string; revenue: number }>([
-      { $match: dateMatch },
-      { $unwind: '$items' },
-      {
-        $lookup: {
-          from: 'products',
-          localField: 'items.product',
-          foreignField: '_id',
-          as: 'product',
-        },
-      },
-      { $unwind: '$product' },
-      {
-        $lookup: {
-          from: 'categories',
-          localField: 'product.category',
-          foreignField: '_id',
-          as: 'category',
-        },
-      },
-      { $unwind: '$category' },
-      {
-        $group: {
-          _id: '$category.name',
-          revenue: { $sum: { $multiply: ['$items.price', '$items.quantity'] } },
-        },
-      },
-      { $sort: { revenue: -1 } },
-    ]),
-  ]);
+  const paidOrders = orders.filter((o) => o.paymentStatus === 'paid');
+
+  const salesByDay = groupSalesByDay(
+    paidOrders.map((o) => ({ createdAt: o.createdAt, total: o.total }))
+  );
+
+  const productStats = new Map<string, { name: string; totalSold: number; revenue: number }>();
+  for (const order of paidOrders) {
+    for (const item of order.items) {
+      const current = productStats.get(item.product) ?? {
+        name: item.name,
+        totalSold: 0,
+        revenue: 0,
+      };
+      current.totalSold += item.quantity;
+      current.revenue += item.price * item.quantity;
+      productStats.set(item.product, current);
+    }
+  }
+
+  const topProducts = [...productStats.entries()]
+    .map(([_id, stats]) => ({ _id, ...stats }))
+    .sort((a, b) => b.totalSold - a.totalSold)
+    .slice(0, 10);
+
+  const statusCounts = new Map<string, number>();
+  for (const order of orders) {
+    statusCounts.set(order.orderStatus, (statusCounts.get(order.orderStatus) ?? 0) + 1);
+  }
+  const ordersByStatus = [...statusCounts.entries()].map(([_id, count]) => ({ _id, count }));
+
+  const productIds = [...new Set(paidOrders.flatMap((o) => o.items.map((i) => i.product)))];
+  const products = productIds.length
+    ? await prisma.product.findMany({
+        where: { id: { in: productIds } },
+        include: { category: { select: { name: true } } },
+      })
+    : [];
+
+  const categoryByProduct = new Map(products.map((p) => [p.id, p.category.name]));
+  const categoryRevenue = new Map<string, number>();
+  for (const order of paidOrders) {
+    for (const item of order.items) {
+      const category = categoryByProduct.get(item.product) ?? 'Uncategorized';
+      categoryRevenue.set(
+        category,
+        (categoryRevenue.get(category) ?? 0) + item.price * item.quantity
+      );
+    }
+  }
+
+  const revenueByCategory = [...categoryRevenue.entries()]
+    .map(([_id, revenue]) => ({ _id, revenue }))
+    .sort((a, b) => b.revenue - a.revenue);
 
   res.json({
     success: true,

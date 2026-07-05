@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "seed": "tsx src/seed.ts",
+    "seed:demo": "tsx src/seedDemoData.ts",
     "db:generate": "prisma generate",
     "postinstall": "prisma generate"
   },

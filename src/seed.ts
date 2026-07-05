@@ -1,11 +1,40 @@
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
+import {
+  OrderStatus,
+  PaymentMethod,
+  PaymentStatus,
+  ReviewStatus,
+} from '@prisma/client';
 import { prisma } from './lib/prisma';
 import { uploadFromUrl } from './utils/cloudinaryUpload';
 
 dotenv.config();
 
 const seedImage = async (url: string) => uploadFromUrl(url, 'ecommerce/seed');
+
+const generateOrderNumber = () => {
+  const timestamp = Date.now().toString(36).toUpperCase();
+  const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+  return `ORD-${timestamp}-${random}`;
+};
+
+const daysAgo = (days: number) => {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  date.setHours(9 + Math.floor(Math.random() * 10), Math.floor(Math.random() * 60), 0, 0);
+  return date;
+};
+
+const pick = <T>(items: T[]) => items[Math.floor(Math.random() * items.length)];
+
+const sampleAddress = () => ({
+  street: `${100 + Math.floor(Math.random() * 900)} Main St`,
+  city: pick(['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix']),
+  state: pick(['NY', 'CA', 'IL', 'TX', 'AZ']),
+  zipCode: String(10000 + Math.floor(Math.random() * 89999)),
+  country: 'US',
+});
 
 const seed = async () => {
   await prisma.$connect();
@@ -31,6 +60,10 @@ const seed = async () => {
     data: [
       { name: 'Admin User', email: 'admin@store.com', password: adminPassword, role: 'admin', emailVerified: true },
       { name: 'John Doe', email: 'john@example.com', password: customerPassword, role: 'customer', emailVerified: true },
+      { name: 'Sarah Miller', email: 'sarah@example.com', password: customerPassword, role: 'customer', emailVerified: true, phone: '+1 555-0102' },
+      { name: 'Mike Chen', email: 'mike@example.com', password: customerPassword, role: 'customer', emailVerified: true, phone: '+1 555-0103' },
+      { name: 'Emma Wilson', email: 'emma@example.com', password: customerPassword, role: 'customer', emailVerified: true, phone: '+1 555-0104' },
+      { name: 'Alex Rivera', email: 'alex@example.com', password: customerPassword, role: 'customer', emailVerified: false },
     ],
   });
 
@@ -237,9 +270,118 @@ const seed = async () => {
     ],
   });
 
+  const [products, customers, welcomeCoupon] = await Promise.all([
+    prisma.product.findMany({ orderBy: { createdAt: 'asc' } }),
+    prisma.user.findMany({ where: { role: 'customer' } }),
+    prisma.coupon.findUnique({ where: { code: 'WELCOME10' } }),
+  ]);
+
+  const paymentProfiles: { paymentStatus: PaymentStatus; orderStatus: OrderStatus; weight: number }[] = [
+    { paymentStatus: 'paid', orderStatus: 'delivered', weight: 35 },
+    { paymentStatus: 'paid', orderStatus: 'shipped', weight: 15 },
+    { paymentStatus: 'paid', orderStatus: 'processing', weight: 10 },
+    { paymentStatus: 'paid', orderStatus: 'confirmed', weight: 8 },
+    { paymentStatus: 'pending', orderStatus: 'pending', weight: 12 },
+    { paymentStatus: 'paid', orderStatus: 'pending', weight: 5 },
+    { paymentStatus: 'failed', orderStatus: 'cancelled', weight: 5 },
+    { paymentStatus: 'refunded', orderStatus: 'cancelled', weight: 3 },
+    { paymentStatus: 'paid', orderStatus: 'cancelled', weight: 2 },
+  ];
+
+  const weightedProfiles = paymentProfiles.flatMap((p) => Array(p.weight).fill(p));
+
+  const orderSeeds = Array.from({ length: 28 }, (_, index) => {
+    const customer = customers[index % customers.length];
+    const profile = pick(weightedProfiles) as (typeof paymentProfiles)[number];
+    const itemCount = 1 + Math.floor(Math.random() * 3);
+    const chosenProducts = [...products].sort(() => Math.random() - 0.5).slice(0, itemCount);
+
+    const items = chosenProducts.map((product) => {
+      const sizeVariant = pick(product.sizes);
+      const quantity = 1 + Math.floor(Math.random() * 2);
+      return {
+        product: product.id,
+        name: product.name,
+        image: product.images[0] || '',
+        price: product.price,
+        size: sizeVariant.size,
+        color: product.colors[0] ?? undefined,
+        quantity,
+      };
+    });
+
+    const subtotal = Math.round(items.reduce((sum, item) => sum + item.price * item.quantity, 0) * 100) / 100;
+    const useCoupon = index % 5 === 0 && welcomeCoupon && subtotal >= welcomeCoupon.minOrderAmount;
+    let discount = 0;
+    if (useCoupon && welcomeCoupon) {
+      discount = Math.min(subtotal * 0.1, welcomeCoupon.maxDiscount ?? subtotal);
+      discount = Math.round(discount * 100) / 100;
+    }
+    const shippingCost = subtotal >= 100 ? 0 : 9.99;
+    const total = Math.round(Math.max(0, subtotal - discount + shippingCost) * 100) / 100;
+    const dayOffset = Math.floor((index / 28) * 85) + Math.floor(Math.random() * 4);
+
+    return {
+      userId: customer.id,
+      orderNumber: generateOrderNumber(),
+      items,
+      shippingAddress: sampleAddress(),
+      paymentMethod: 'stripe' as PaymentMethod,
+      paymentStatus: profile.paymentStatus,
+      orderStatus: profile.orderStatus,
+      subtotal,
+      discount,
+      shippingCost,
+      total,
+      couponId: useCoupon ? welcomeCoupon?.id : undefined,
+      createdAt: daysAgo(dayOffset),
+    };
+  });
+
+  for (const order of orderSeeds) {
+    await prisma.order.create({ data: order });
+  }
+
+  const reviewComments = [
+  { rating: 5, title: 'Love it!', comment: 'Great quality and fits perfectly. Will buy again.' },
+  { rating: 4, title: 'Very good', comment: 'Nice product, shipping was fast. Slightly pricey but worth it.' },
+  { rating: 5, title: 'Excellent', comment: 'Exceeded my expectations. Highly recommend.' },
+  { rating: 3, title: 'Okay', comment: 'Decent quality but sizing runs a bit small.' },
+  { rating: 2, title: 'Not for me', comment: 'Color was different from the photos.' },
+  { rating: 5, title: 'Perfect gift', comment: 'Bought this as a gift and they loved it.' },
+  { rating: 4, title: 'Solid purchase', comment: 'Good value for money. Comfortable material.' },
+  { rating: 1, title: 'Disappointed', comment: 'Arrived with a small defect. Waiting on replacement.' },
+  ];
+
+  const reviewStatuses: ReviewStatus[] = ['approved', 'approved', 'approved', 'pending', 'pending', 'rejected'];
+
+  for (let i = 0; i < reviewComments.length; i++) {
+    const product = products[i % products.length];
+    const customer = customers[i % customers.length];
+    const review = reviewComments[i];
+    await prisma.review.create({
+      data: {
+        productId: product.id,
+        userId: customer.id,
+        rating: review.rating,
+        title: review.title,
+        comment: review.comment,
+        status: reviewStatuses[i % reviewStatuses.length],
+        createdAt: daysAgo(3 + i * 4),
+      },
+    });
+  }
+
+  const paidOrderCount = orderSeeds.filter((o) => o.paymentStatus === 'paid').length;
+  const totalRevenue = orderSeeds
+    .filter((o) => o.paymentStatus === 'paid')
+    .reduce((sum, o) => sum + o.total, 0);
+
   console.log('Seed data created successfully!');
   console.log('Admin: admin@store.com / admin123');
   console.log('Customer: john@example.com / customer123');
+  console.log(`Orders: ${orderSeeds.length} (${paidOrderCount} paid, $${totalRevenue.toFixed(2)} revenue)`);
+  console.log(`Reviews: ${reviewComments.length} (mix of pending, approved, rejected)`);
   await prisma.$disconnect();
   process.exit(0);
 };
