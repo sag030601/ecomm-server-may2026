@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { prisma } from './lib/prisma';
 import { uploadFromUrl } from './utils/cloudinaryUpload';
+import { asProductSizeList } from './types/json';
 
 dotenv.config();
 
@@ -297,7 +298,7 @@ const seed = async () => {
     const chosenProducts = [...products].sort(() => Math.random() - 0.5).slice(0, itemCount);
 
     const items = chosenProducts.map((product) => {
-      const sizeVariant = pick(product.sizes);
+      const sizeVariant = pick(asProductSizeList(product.sizes));
       const quantity = 1 + Math.floor(Math.random() * 2);
       return {
         product: product.id,
