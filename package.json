@@ -13,6 +13,7 @@
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:deploy": "prisma migrate deploy",
+    "migrate:mongo": "tsx src/scripts/migrateMongoToSupabase.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
@@ -43,6 +44,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "mongodb": "^6.21.0",
     "prisma": "^6.19.0",
     "tsx": "^4.19.2"
   }
