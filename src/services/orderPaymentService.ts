@@ -1,6 +1,7 @@
 import { Order, Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { AppError } from '../utils/AppError';
+import { asOrderItemList, asProductSizeList } from '../types/json';
 
 const isWriteConflict = (error: unknown): boolean =>
   error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
@@ -21,18 +22,19 @@ export const finalizePaidOrder = async (order: Order) => {
           return;
         }
 
-        for (const item of current.items) {
+        for (const item of asOrderItemList(current.items)) {
           const product = await tx.product.findUnique({ where: { id: item.product } });
           if (!product) {
             throw new AppError(`Product not found for order item: ${item.name}`, 400);
           }
 
-          const sizeIndex = product.sizes.findIndex((s) => s.size === item.size);
-          if (sizeIndex === -1 || product.sizes[sizeIndex].stock < item.quantity) {
+          const sizes = asProductSizeList(product.sizes);
+          const sizeIndex = sizes.findIndex((s) => s.size === item.size);
+          if (sizeIndex === -1 || sizes[sizeIndex].stock < item.quantity) {
             throw new AppError(`Insufficient stock for ${item.name} (${item.size})`, 400);
           }
 
-          const updatedSizes = product.sizes.map((s, i) =>
+          const updatedSizes = sizes.map((s, i) =>
             i === sizeIndex ? { ...s, stock: s.stock - item.quantity } : s
           );
 

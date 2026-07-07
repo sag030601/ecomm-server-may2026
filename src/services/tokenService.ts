@@ -4,6 +4,7 @@ import { env } from '../config/env';
 import { prisma } from '../lib/prisma';
 import { generateSecureToken, hashToken } from '../utils/crypto';
 import type { AuthUser } from '../types/domain';
+import { asAddressList, asOAuthAccountList } from '../types/json';
 
 export interface TokenPayload {
   id: string;
@@ -162,10 +163,10 @@ export const sanitizeUser = (user: AuthUser | User) => ({
   email: user.email,
   role: user.role,
   phone: user.phone,
-  addresses: user.addresses,
+  addresses: asAddressList(user.addresses),
   avatar: user.avatar,
   emailVerified: user.emailVerified,
-  oauthAccounts: user.oauthAccounts?.map((a) => ({
+  oauthAccounts: asOAuthAccountList(user.oauthAccounts).map((a) => ({
     provider: a.provider,
     email: a.email,
     linkedAt: a.linkedAt,

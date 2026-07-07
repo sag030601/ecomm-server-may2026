@@ -18,6 +18,7 @@ import {
 import { createStripeCheckoutSession } from '../utils/stripeCheckoutSession';
 import { logger } from '../utils/logger';
 import { toApiResponse } from '../utils/serialize';
+import { asOrderItemList, asProductSizeList, OrderItemJson } from '../types/json';
 
 const generateOrderNumber = () => {
   const timestamp = Date.now().toString(36).toUpperCase();
@@ -42,12 +43,13 @@ const decrementStock = async (productId: string, size: string, quantity: number)
   const product = await prisma.product.findUnique({ where: { id: productId } });
   if (!product) throw new AppError(`Product not found: ${productId}`, 404);
 
-  const sizeIndex = product.sizes.findIndex((s) => s.size === size);
-  if (sizeIndex === -1 || product.sizes[sizeIndex].stock < quantity) {
+  const sizes = asProductSizeList(product.sizes);
+  const sizeIndex = sizes.findIndex((s) => s.size === size);
+  if (sizeIndex === -1 || sizes[sizeIndex].stock < quantity) {
     throw new AppError(`Insufficient stock for ${product.name} (${size})`, 400);
   }
 
-  const updatedSizes = product.sizes.map((s, i) =>
+  const updatedSizes = sizes.map((s, i) =>
     i === sizeIndex ? { ...s, stock: s.stock - quantity } : s
   );
 
@@ -65,14 +67,14 @@ export const createOrder = catchAsync(async (req: AuthRequest, res: Response) =>
   }
   const mergedItems = mergeOrderLineItems(req.body.items);
 
-  const orderItems: Prisma.OrderCreateInput['items'] = [];
+  const orderItems: OrderItemJson[] = [];
   let subtotal = 0;
 
   for (const item of mergedItems) {
     const product = await prisma.product.findUnique({ where: { id: item.product } });
     if (!product || !product.isActive) throw new AppError(`Product not found: ${item.product}`, 404);
 
-    const sizeVariant = product.sizes.find((s) => s.size === item.size);
+    const sizeVariant = asProductSizeList(product.sizes).find((s) => s.size === item.size);
     if (!sizeVariant) throw new AppError(`Size ${item.size} not available for ${product.name}`, 400);
     if (sizeVariant.stock < item.quantity) {
       throw new AppError(`Insufficient stock for ${product.name} (${item.size})`, 400);

@@ -10,6 +10,10 @@
     "seed": "tsx src/seed.ts",
     "seed:demo": "tsx src/seedDemoData.ts",
     "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:push": "prisma db push",
+    "db:deploy": "prisma migrate deploy",
+    "migrate:mongo": "tsx src/scripts/migrateMongoToSupabase.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
@@ -30,7 +34,6 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "express-mongo-sanitize": "^2.2.0",
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
@@ -41,6 +44,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "mongodb": "^6.21.0",
     "prisma": "^6.19.0",
     "tsx": "^4.19.2"
   }

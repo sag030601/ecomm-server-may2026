@@ -35,6 +35,7 @@ import type { OAuthProvider } from '../types/domain';
 import { env } from '../config/env';
 import { logger } from '../utils/logger';
 import { toApiResponse } from '../utils/serialize';
+import { asAddressList, asOAuthAccountList } from '../types/json';
 
 const sendAuthResponse = async (user: User, res: Response, req: AuthRequest, statusCode = 200) => {
   const reqMeta = getRequestMeta(req);
@@ -195,7 +196,7 @@ export const addAddress = catchAsync(async (req: AuthRequest, res: Response) => 
   const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
   if (!user) throw new AppError('User not found', 404);
 
-  const addresses = user.addresses.map((a) =>
+  const addresses = asAddressList(user.addresses).map((a) =>
     req.body.isDefault ? { ...a, isDefault: false } : a
   );
 
@@ -213,12 +214,12 @@ export const updateAddress = catchAsync(async (req: AuthRequest, res: Response) 
   const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
   if (!user) throw new AppError('User not found', 404);
 
-  const addressIndex = user.addresses.findIndex(
+  const addressIndex = asAddressList(user.addresses).findIndex(
     (a) => a.id === req.params.addressId || (a as { _id?: string })._id === req.params.addressId
   );
   if (addressIndex === -1) throw new AppError('Address not found', 404);
 
-  const addresses = user.addresses.map((addr, i) => {
+  const addresses = asAddressList(user.addresses).map((addr, i) => {
     if (req.body.isDefault && i !== addressIndex) {
       return { ...addr, isDefault: false };
     }
@@ -240,10 +241,11 @@ export const deleteAddress = catchAsync(async (req: AuthRequest, res: Response) 
   const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
   if (!user) throw new AppError('User not found', 404);
 
-  const addresses = user.addresses.filter(
+  const currentAddresses = asAddressList(user.addresses);
+  const addresses = currentAddresses.filter(
     (a) => a.id !== req.params.addressId && (a as { _id?: string })._id !== req.params.addressId
   );
-  if (addresses.length === user.addresses.length) throw new AppError('Address not found', 404);
+  if (addresses.length === currentAddresses.length) throw new AppError('Address not found', 404);
 
   const updated = await prisma.user.update({
     where: { id: user.id },
@@ -367,13 +369,12 @@ const findOrCreateOAuthUser = async (
 ): Promise<User> => {
   const normalizedEmail = profile.email.toLowerCase();
 
-  const usersWithOAuth = await prisma.user.findMany({
-    where: { oauthAccounts: { isEmpty: false } },
-  });
-
+  const usersWithOAuth = await prisma.user.findMany();
   let user =
     usersWithOAuth.find((u) =>
-      u.oauthAccounts.some((a) => a.provider === provider && a.providerId === profile.providerId)
+      asOAuthAccountList(u.oauthAccounts).some(
+        (a) => a.provider === provider && a.providerId === profile.providerId
+      )
     ) ?? null;
 
   if (user) {
@@ -400,7 +401,7 @@ const findOrCreateOAuthUser = async (
       where: { id: user.id },
       data: {
         oauthAccounts: [
-          ...user.oauthAccounts,
+          ...asOAuthAccountList(user.oauthAccounts),
           {
             provider,
             providerId: profile.providerId,

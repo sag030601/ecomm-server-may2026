@@ -3,7 +3,7 @@ import { logger } from '../utils/logger';
 
 export const connectDB = async (): Promise<void> => {
   await prisma.$connect();
-  logger.info('Database connected (Prisma)');
+  logger.info('Database connected (Prisma / Supabase PostgreSQL)');
 };
 
 export const disconnectDB = async (): Promise<void> => {
@@ -13,7 +13,7 @@ export const disconnectDB = async (): Promise<void> => {
 
 export const checkDBHealth = async (): Promise<boolean> => {
   try {
-    await prisma.$runCommandRaw({ ping: 1 });
+    await prisma.$queryRaw`SELECT 1`;
     return true;
   } catch {
     return false;

@@ -4,6 +4,7 @@ import { AuthRequest } from '../middleware/auth';
 import { AppError } from '../utils/AppError';
 import { catchAsync } from '../utils/catchAsync';
 import { toApiResponse } from '../utils/serialize';
+import { asOrderItemList } from '../types/json';
 
 const dateKey = (date: Date) => date.toISOString().slice(0, 10);
 
@@ -98,7 +99,7 @@ export const getAnalytics = catchAsync(async (req: AuthRequest, res: Response) =
 
   const productStats = new Map<string, { name: string; totalSold: number; revenue: number }>();
   for (const order of paidOrders) {
-    for (const item of order.items) {
+    for (const item of asOrderItemList(order.items)) {
       const current = productStats.get(item.product) ?? {
         name: item.name,
         totalSold: 0,
@@ -121,7 +122,7 @@ export const getAnalytics = catchAsync(async (req: AuthRequest, res: Response) =
   }
   const ordersByStatus = [...statusCounts.entries()].map(([_id, count]) => ({ _id, count }));
 
-  const productIds = [...new Set(paidOrders.flatMap((o) => o.items.map((i) => i.product)))];
+  const productIds = [...new Set(paidOrders.flatMap((o) => asOrderItemList(o.items).map((i) => i.product)))];
   const products = productIds.length
     ? await prisma.product.findMany({
         where: { id: { in: productIds } },
@@ -132,7 +133,7 @@ export const getAnalytics = catchAsync(async (req: AuthRequest, res: Response) =
   const categoryByProduct = new Map(products.map((p) => [p.id, p.category.name]));
   const categoryRevenue = new Map<string, number>();
   for (const order of paidOrders) {
-    for (const item of order.items) {
+    for (const item of asOrderItemList(order.items)) {
       const category = categoryByProduct.get(item.product) ?? 'Uncategorized';
       categoryRevenue.set(
         category,

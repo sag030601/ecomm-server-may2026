@@ -6,6 +6,8 @@ import { AppError } from '../utils/AppError';
 import { catchAsync } from '../utils/catchAsync';
 import { toDollars } from '../utils/pricing';
 import { toApiResponse } from '../utils/serialize';
+import { asProductSizeList } from '../types/json';
+import { findProductIdsBySize } from '../utils/jsonQuery';
 
 const slugify = (text: string) =>
   text.toLowerCase().replace(/[^\w\s-]/g, '').replace(/[\s_-]+/g, '-').replace(/^-+|-+$/g, '');
@@ -48,7 +50,10 @@ export const getProducts = catchAsync(async (req: AuthRequest, res: Response) =>
     if (minPrice) where.price.gte = Number(minPrice);
     if (maxPrice) where.price.lte = Number(maxPrice);
   }
-  if (size) where.sizes = { some: { size: size as string } };
+  if (size) {
+    const productIds = await findProductIdsBySize(size as string);
+    where.id = { in: productIds };
+  }
   if (color) where.colors = { has: color as string };
   if (search) {
     where.OR = [
@@ -171,11 +176,15 @@ export const getInventory = catchAsync(async (_req: AuthRequest, res: Response) 
     orderBy: { name: 'asc' },
   });
 
-  const inventory = products.map((p) => ({
-    ...p,
-    image: p.images[0],
-    totalStock: p.sizes.reduce((sum, s) => sum + s.stock, 0),
-  }));
+  const inventory = products.map((p) => {
+    const sizes = asProductSizeList(p.sizes);
+    return {
+      ...p,
+      image: p.images[0],
+      sizes,
+      totalStock: sizes.reduce((sum, s) => sum + s.stock, 0),
+    };
+  });
 
   res.json({ success: true, inventory: toApiResponse(inventory) });
 });
@@ -244,7 +253,7 @@ export const validateCartItems = catchAsync(async (req: AuthRequest, res: Respon
       continue;
     }
 
-    const sizeVariant = product.sizes.find((s) => s.size === item.size);
+    const sizeVariant = asProductSizeList(product.sizes).find((s) => s.size === item.size);
     if (!sizeVariant) {
       removed.push({
         productId: item.productId,

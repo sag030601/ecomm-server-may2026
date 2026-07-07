@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "mongodb"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 enum Role {
@@ -50,62 +51,20 @@ enum ReviewStatus {
   rejected
 }
 
-type Address {
-  id        String?
-  label     String
-  street    String
-  city      String
-  state     String
-  zipCode   String
-  country   String  @default("US")
-  isDefault Boolean @default(false)
-}
-
-type OAuthAccount {
-  provider   OAuthProvider
-  providerId String
-  email      String
-  linkedAt   DateTime      @default(now())
-}
-
-type ProductSize {
-  size  String
-  stock Int
-  sku   String?
-}
-
-type OrderItem {
-  product  String  @db.ObjectId
-  name     String
-  image    String
-  price    Float
-  size     String
-  color    String?
-  quantity Int
-}
-
-type ShippingAddress {
-  street  String
-  city    String
-  state   String
-  zipCode String
-  country String @default("US")
-}
-
 model User {
-  id            String         @id @default(auto()) @map("_id") @db.ObjectId
+  id            String   @id @default(uuid()) @db.Uuid
   name          String
-  email         String         @unique
+  email         String   @unique
   password      String?
-  role          Role           @default(customer)
+  role          Role     @default(customer)
   phone         String?
-  addresses     Address[]
+  addresses     Json     @default("[]")
   avatar        String?
-  emailVerified Boolean        @default(false)
-  oauthAccounts OAuthAccount[]
-  tokenVersion  Int            @default(0)
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  emailVerified Boolean  @default(false)
+  oauthAccounts Json     @default("[]")
+  tokenVersion  Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   sessions Session[]
   orders   Order[]
@@ -115,48 +74,48 @@ model User {
 }
 
 model Category {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  id          String   @id @default(uuid()) @db.Uuid
   name        String
   slug        String   @unique
   description String?
   image       String?
-  parentId    String?  @map("parent") @db.ObjectId
-  parent      Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  parentId    String?  @db.Uuid
+  parent      Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   children    Category[] @relation("CategoryHierarchy")
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  products          Product[] @relation("ProductCategory")
+  products            Product[] @relation("ProductCategory")
   subcategoryProducts Product[] @relation("ProductSubcategory")
 
   @@map("categories")
 }
 
 model Product {
-  id              String        @id @default(auto()) @map("_id") @db.ObjectId
-  name            String
-  slug            String        @unique
-  description     String
-  price           Float
-  compareAtPrice  Float?
-  categoryId      String        @map("category") @db.ObjectId
-  category        Category      @relation("ProductCategory", fields: [categoryId], references: [id])
-  subcategoryId   String?       @map("subcategory") @db.ObjectId
-  subcategory     Category?     @relation("ProductSubcategory", fields: [subcategoryId], references: [id])
-  images          String[]
-  colors          String[]
-  sizes           ProductSize[]
-  tags            String[]
-  isFeatured      Boolean       @default(false)
-  isBestSeller    Boolean       @default(false)
-  isSpecialCombo  Boolean       @default(false)
-  isCrazyDeal     Boolean       @default(false)
-  rating          Float         @default(0)
-  reviewCount     Int           @default(0)
-  isActive        Boolean       @default(true)
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id             String   @id @default(uuid()) @db.Uuid
+  name           String
+  slug           String   @unique
+  description    String
+  price          Float
+  compareAtPrice Float?
+  categoryId     String   @db.Uuid
+  category       Category @relation("ProductCategory", fields: [categoryId], references: [id])
+  subcategoryId  String?  @db.Uuid
+  subcategory    Category? @relation("ProductSubcategory", fields: [subcategoryId], references: [id])
+  images         String[]
+  colors         String[]
+  sizes          Json     @default("[]")
+  tags           String[]
+  isFeatured     Boolean  @default(false)
+  isBestSeller   Boolean  @default(false)
+  isSpecialCombo Boolean  @default(false)
+  isCrazyDeal    Boolean  @default(false)
+  rating         Float    @default(0)
+  reviewCount    Int      @default(0)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   reviews Review[]
 
@@ -165,26 +124,26 @@ model Product {
 }
 
 model Order {
-  id                    String          @id @default(auto()) @map("_id") @db.ObjectId
-  userId                String          @map("user") @db.ObjectId
-  user                  User            @relation(fields: [userId], references: [id])
-  orderNumber           String          @unique
-  items                 OrderItem[]
-  shippingAddress       ShippingAddress
-  paymentMethod         PaymentMethod
-  paymentStatus         PaymentStatus   @default(pending)
-  orderStatus           OrderStatus     @default(pending)
-  subtotal              Float
-  discount              Float           @default(0)
-  shippingCost          Float           @default(0)
-  total                 Float
-  couponId              String?         @map("coupon") @db.ObjectId
-  coupon                Coupon?         @relation(fields: [couponId], references: [id])
-  stripePaymentIntentId String?
+  id                      String        @id @default(uuid()) @db.Uuid
+  userId                  String        @db.Uuid
+  user                    User          @relation(fields: [userId], references: [id])
+  orderNumber             String        @unique
+  items                   Json
+  shippingAddress         Json
+  paymentMethod           PaymentMethod
+  paymentStatus           PaymentStatus @default(pending)
+  orderStatus             OrderStatus   @default(pending)
+  subtotal                Float
+  discount                Float         @default(0)
+  shippingCost            Float         @default(0)
+  total                   Float
+  couponId                String?       @db.Uuid
+  coupon                  Coupon?       @relation(fields: [couponId], references: [id])
+  stripePaymentIntentId   String?
   stripeCheckoutSessionId String?
-  notes                 String?
-  createdAt             DateTime        @default(now())
-  updatedAt             DateTime        @updatedAt
+  notes                   String?
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([orderStatus])
@@ -192,7 +151,7 @@ model Order {
 }
 
 model Coupon {
-  id             String       @id @default(auto()) @map("_id") @db.ObjectId
+  id             String       @id @default(uuid()) @db.Uuid
   code           String       @unique
   description    String?
   discountType   DiscountType
@@ -212,10 +171,10 @@ model Coupon {
 }
 
 model Review {
-  id        String       @id @default(auto()) @map("_id") @db.ObjectId
-  productId String       @map("product") @db.ObjectId
+  id        String       @id @default(uuid()) @db.Uuid
+  productId String       @db.Uuid
   product   Product      @relation(fields: [productId], references: [id])
-  userId    String       @map("user") @db.ObjectId
+  userId    String       @db.Uuid
   user      User         @relation(fields: [userId], references: [id])
   rating    Int
   title     String?
@@ -229,7 +188,7 @@ model Review {
 }
 
 model Banner {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  id        String   @id @default(uuid()) @db.Uuid
   title     String
   subtitle  String?
   image     String
@@ -243,8 +202,8 @@ model Banner {
 }
 
 model Session {
-  id               String    @id @default(auto()) @map("_id") @db.ObjectId
-  userId           String    @map("user") @db.ObjectId
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @db.Uuid
   user             User      @relation(fields: [userId], references: [id])
   refreshTokenHash String    @unique
   familyId         String
@@ -262,9 +221,9 @@ model Session {
 }
 
 model AuditLog {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  id        String   @id @default(uuid()) @db.Uuid
   action    String
-  userId    String?  @db.ObjectId
+  userId    String?  @db.Uuid
   ipAddress String   @default("")
   userAgent String   @default("")
   metadata  Json     @default("{}")
@@ -277,7 +236,7 @@ model AuditLog {
 }
 
 model OAuthState {
-  id             String        @id @default(auto()) @map("_id") @db.ObjectId
+  id             String        @id @default(uuid()) @db.Uuid
   state          String        @unique
   provider       OAuthProvider
   codeVerifier   String
@@ -289,10 +248,10 @@ model OAuthState {
 }
 
 model OAuthExchange {
-  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  id           String   @id @default(uuid()) @db.Uuid
   code         String   @unique
   refreshToken String
-  userId       String   @db.ObjectId
+  userId       String   @db.Uuid
   expiresAt    DateTime
 
   @@map("oauthexchanges")

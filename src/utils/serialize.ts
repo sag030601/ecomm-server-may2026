@@ -1,4 +1,4 @@
-/** Map Prisma `id` fields to `_id` for frontend/Mongoose API compatibility. */
+/** Map Prisma `id` fields to `_id` for frontend API compatibility. */
 export const toApiResponse = <T>(input: T): T => {
   if (input === null || input === undefined) return input;
   if (input instanceof Date) return input;

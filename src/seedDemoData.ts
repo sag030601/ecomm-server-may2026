@@ -10,6 +10,7 @@ import {
   ReviewStatus,
 } from '@prisma/client';
 import { prisma } from './lib/prisma';
+import { asProductSizeList } from './types/json';
 
 dotenv.config();
 
@@ -69,7 +70,7 @@ const seedDemoData = async () => {
     const customer = customers[i % customers.length];
     const profile = pick(profiles);
     const product = pick(products);
-    const sizeVariant = pick(product.sizes);
+    const sizeVariant = pick(asProductSizeList(product.sizes));
     const quantity = 1 + Math.floor(Math.random() * 2);
     const subtotal = Math.round(product.price * quantity * 100) / 100;
     const shippingCost = subtotal >= 100 ? 0 : 9.99;
